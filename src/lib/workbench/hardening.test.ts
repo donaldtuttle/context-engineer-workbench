@@ -62,14 +62,14 @@ test("concurrent requests on either side of midnight share one concurrency bound
   const first = new MemoryQuotaStore(backing);
   const second = new MemoryQuotaStore(backing);
   const limits = { ...DEFAULT_LIMITS, concurrency: 1 };
-  const a = await first.reserve({ period: "2026-10-12", nowMs: 60_000, clientKey: "a", limits, tokens: 10 });
+  const a = await first.reserve({ period: "2026-10-12", nowMs: 60_000, holdMs: 600_000, clientKey: "a", limits, tokens: 10 });
   assert.equal(a.ok, true);
-  const b = await second.reserve({ period: "2026-10-13", nowMs: 120_000, clientKey: "b", limits, tokens: 10 });
+  const b = await second.reserve({ period: "2026-10-13", nowMs: 120_000, holdMs: 600_000, clientKey: "b", limits, tokens: 10 });
   assert.equal(b.ok, false);
   if (!a.ok) return;
   await second.reconcile({ reservationId: a.reservation.id, actualTokens: null });
   assert.equal(backing.periods["2026-10-12"].tokens, 10);
-  assert.equal((await second.reserve({ period: "2026-10-13", nowMs: 120_000, clientKey: "b", limits, tokens: 10 })).ok, true);
+  assert.equal((await second.reserve({ period: "2026-10-13", nowMs: 120_000, holdMs: 600_000, clientKey: "b", limits, tokens: 10 })).ok, true);
 });
 
 test("partial, negative, and unsafe usage cannot refund the reserved allowance", () => {
@@ -108,7 +108,7 @@ test("an access refusal finalizes, saves, exports and imports without changing i
   if (restored.kind === "conversations") assert.deepEqual(restored.conversations[0].turns[0], turn);
 });
 
-test("paid timeouts keep their slot while a known preflight refusal consumes no tokens", async () => {
+test("a timeout before completion releases the slot and a preflight refusal consumes no tokens", async () => {
   const token = "hardening-test-token-abcdefghijklmnopqrstuvwxyz";
   const data = { accessToken: token, model: "grok-4.5", messages: [{ role: "user", content: "hello" }], contextText: "", timeoutSeconds: 30, maxOutputTokens: 32, temperature: null, topP: null, seed: null };
   const env = { enableFlag: "1", apiKey: "fixture-key", contextFloor: undefined, accessToken: token, sharedStore: true, quota: { ok: true as const, limits: { ...DEFAULT_LIMITS, concurrency: 1 } } };
@@ -118,13 +118,14 @@ test("paid timeouts keep their slot while a known preflight refusal consumes no 
   const store = new MemoryQuotaStore();
   const args = { data, env, request, store, fetchImpl, nowMs: Date.parse("2026-10-12T12:00:00Z") };
   assert.equal((await executePaidTurn(args)).executionStatus, "timeout");
-  assert.equal((await executePaidTurn(args)).executionStatus, "blocked");
-  assert.equal(calls, 1);
-  assert.equal(store.backing.periods["2026-10-12"].concurrency, 1);
+  assert.equal(store.backing.periods["2026-10-12"].concurrency, 0);
+  assert.equal(store.backing.periods["2026-10-12"].tokens, Buffer.byteLength("user\nhello"));
+  assert.equal((await executePaidTurn({ ...args, nowMs: args.nowMs + 61_000 })).executionStatus, "timeout");
+  assert.equal(calls, 2);
   const fresh = new MemoryQuotaStore();
   const denied = await executePaidTurn({ ...args, store: fresh, env: { ...env, contextFloor: "16" } });
   assert.equal(denied.contextBudget.budget, -16);
   assert.equal(denied.quotaAccounting?.settledTokens, 0);
   assert.equal(fresh.backing.periods["2026-10-12"].tokens, 0);
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });

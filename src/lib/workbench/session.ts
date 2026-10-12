@@ -83,10 +83,10 @@ export async function beginSend(state: PersistedState, userPrompt: string, clock
   }
   if (
     !Number.isFinite(draft.timeoutSeconds) ||
-    draft.timeoutSeconds < 0.05 ||
+    draft.timeoutSeconds < 5 ||
     draft.timeoutSeconds > 300
   ) {
-    return { ok: false, reason: "Timeout must be between 0.05 and 300 seconds." };
+    return { ok: false, reason: "Timeout must be between 5 and 300 seconds." };
   }
   if (
     !Number.isInteger(draft.maxOutputTokens) ||

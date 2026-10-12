@@ -6,7 +6,7 @@
 import { accessConfigError, accessTokensMatch, ACCESS_TOKEN_MAX_CHARS } from "./access.ts";
 import { promptByteLength, promptSha256 } from "./messages.ts";
 import { runGrokExchange, type GrokEnv } from "./grok-adapter.ts";
-import { conservativeHold, utcPeriod, type QuotaLimits, type QuotaStore } from "./limits.ts";
+import { conservativeHold, utcPeriod, QUOTA_HOLD_GRACE_MS, type QuotaLimits, type QuotaStore } from "./limits.ts";
 import { sha256Text, utf8ByteLength } from "./hash.ts";
 import { LOCAL_BYTE_CEILING, type ChatMessage, type ExchangeResult, type Usage } from "./types.ts";
 import { GROK_WINDOWS } from "./windows.ts";
@@ -123,8 +123,8 @@ export async function parsePaidCall(data: unknown): Promise<{ input: Parameters<
   if (promptByteLength(messages) > LOCAL_BYTE_CEILING) return { error: "The request is larger than the local size ceiling." };
   const timeoutSeconds = body.timeoutSeconds;
   const maxOutputTokens = body.maxOutputTokens;
-  if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds) || timeoutSeconds < 0.05 || timeoutSeconds > 300) {
-    return { error: "Timeout must be between 0.05 and 300 seconds." };
+  if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds) || timeoutSeconds < 5 || timeoutSeconds > 300) {
+    return { error: "Timeout must be between 5 and 300 seconds." };
   }
   if (typeof maxOutputTokens !== "number" || !Number.isInteger(maxOutputTokens) || maxOutputTokens < 16 || maxOutputTokens > 8192) {
     return { error: "Max output must be an integer from 16 to 8192." };
@@ -232,6 +232,7 @@ export async function executePaidTurn(args: {
       period,
       clientKey: clientKeyFromHeaders(args.headers ?? { get: () => null }),
       nowMs,
+      holdMs: parsed.input.timeoutSeconds * 1000 + QUOTA_HOLD_GRACE_MS,
       limits: args.env.quota.limits,
       tokens: hold,
     });
@@ -247,19 +248,34 @@ export async function executePaidTurn(args: {
     if (String(url).endsWith("/chat/completions")) completionAttempted = true;
     return args.fetchImpl(url, init);
   };
+  const earlyCharge = () => (providerCalls === 0 ? 0 : tokenizerAllowance);
   try {
     result = await runGrokExchange(parsed.input, args.env, trackedFetch);
   } catch {
+    if (!completionAttempted) {
+      try {
+        await args.store.reconcile({ reservationId: reservation.reservation.id, actualTokens: earlyCharge() });
+      } catch {
+        // The reservation stays. A second reconcile is not attempted.
+      }
+    }
     return { ...blocked("The provider outcome is unknown. The allowance and concurrency reservation remain held for operator review."), executionStatus: "error" };
   }
   const reported = billedTokens(result.providerUsage);
   // Tokenizer usage is not included in completion usage; keep its separate allowance.
-  const settled = providerCalls === 0 ? 0
-    : !completionAttempted && result.executionStatus === "blocked" ? tokenizerAllowance
-    : reported === null ? null : reported + tokenizerAllowance;
+  const beforeCompletion = !completionAttempted && result.executionStatus === "timeout";
+  const settled = beforeCompletion
+    ? earlyCharge()
+    : providerCalls === 0
+      ? 0
+      : !completionAttempted && result.executionStatus === "blocked"
+        ? tokenizerAllowance
+        : reported === null
+          ? null
+          : reported + tokenizerAllowance;
   let reconciled = false;
   try {
-    if (result.executionStatus !== "timeout") {
+    if (beforeCompletion || result.executionStatus !== "timeout") {
       await args.store.reconcile({ reservationId: reservation.reservation.id, actualTokens: settled });
       reconciled = true;
     }

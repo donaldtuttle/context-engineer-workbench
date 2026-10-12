@@ -268,12 +268,12 @@ describe("quota allowance", () => {
     const nowMs = Date.parse("2026-10-12T12:00:00.000Z");
     const period = utcPeriod(nowMs);
     const tight = { ...DEFAULT_LIMITS, ratePerMin: 1, dailyRequestCap: 2, dailyTokenCap: 30, concurrency: 2 };
-    const admitted = await first.reserve({ period, clientKey: clientKeyFromHeaders(headers("1.1.1.1")), nowMs, limits: tight, tokens: 10 });
+    const admitted = await first.reserve({ period, clientKey: clientKeyFromHeaders(headers("1.1.1.1")), nowMs, holdMs: 600_000, limits: tight, tokens: 10 });
     assert.equal(admitted.ok, true);
-    const spoofed = await second.reserve({ period, clientKey: clientKeyFromHeaders(headers("9.9.9.9")), nowMs, limits: tight, tokens: 10 });
+    const spoofed = await second.reserve({ period, clientKey: clientKeyFromHeaders(headers("9.9.9.9")), nowMs, holdMs: 600_000, limits: tight, tokens: 10 });
     assert.equal(spoofed.ok, false);
     const restarted = new MemoryQuotaStore(snapshotBacking(first));
-    const again = await restarted.reserve({ period, clientKey: "deployment", nowMs, limits: tight, tokens: 10 });
+    const again = await restarted.reserve({ period, clientKey: "deployment", nowMs, holdMs: 600_000, limits: tight, tokens: 10 });
     assert.equal(again.ok, false);
   });
 
@@ -282,8 +282,8 @@ describe("quota allowance", () => {
     const nowMs = Date.parse("2026-10-12T12:00:00.000Z");
     const period = utcPeriod(nowMs);
     const tight = { ...DEFAULT_LIMITS, ratePerMin: 10, dailyRequestCap: 10, dailyTokenCap: 100, concurrency: 1 };
-    const held = store.reserve({ period, clientKey: "deployment", nowMs, limits: tight, tokens: 5 });
-    const raced = await store.reserve({ period, clientKey: "deployment", nowMs, limits: tight, tokens: 5 });
+    const held = store.reserve({ period, clientKey: "deployment", nowMs, holdMs: 600_000, limits: tight, tokens: 5 });
+    const raced = await store.reserve({ period, clientKey: "deployment", nowMs, holdMs: 600_000, limits: tight, tokens: 5 });
     const first = await held;
     assert.equal(first.ok, true);
     assert.equal(raced.ok, false);
@@ -299,6 +299,7 @@ describe("quota allowance", () => {
       period: utcPeriod(nextDay),
       clientKey: "deployment",
       nowMs: nextDay,
+      holdMs: 600_000,
       limits: { ...tight, ratePerMin: 1, dailyRequestCap: 1, dailyTokenCap: 5 },
       tokens: 5,
     });

@@ -61,7 +61,7 @@ test("the auth schema ships outside the globbed directory", () => {
   const pending = pendingMigrations(readdirSync(migrationsDir), []);
   assert.deepEqual(
     pending.map((item) => item.name),
-    ["0002_workbench_quota.sql", "0003_workbench_global_concurrency.sql"],
+    ["0002_workbench_quota.sql", "0003_workbench_global_concurrency.sql", "0004_workbench_hold_expiry.sql"],
   );
   assert.equal(pending.some((item) => item.name.includes("auth")), false);
   assert.ok(readdirSync(join(migrationsDir, "auth")).includes("0001_auth.sql"));

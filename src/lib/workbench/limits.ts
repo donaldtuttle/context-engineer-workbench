@@ -24,6 +24,7 @@ export interface QuotaStore {
     period: string;
     clientKey: string;
     nowMs: number;
+    holdMs: number;
     limits: QuotaLimits;
     tokens: number;
   }): Promise<ReserveResult>;
@@ -45,6 +46,9 @@ const MAX_CONCURRENCY = 32;
 export function utcPeriod(nowMs: number): string {
   return new Date(nowMs).toISOString().slice(0, 10);
 }
+
+// Covers provider work that outlives the client timeout.
+export const QUOTA_HOLD_GRACE_MS = 600_000;
 
 // This is a conservative allowance estimate, not a provider-enforced billing bound.
 export const REASONING_ALLOWANCE = 131_072;
@@ -94,7 +98,13 @@ function readBound(
 
 type PeriodRow = { requests: number; tokens: number; concurrency: number };
 type RateRow = { count: number };
-type SavedReservation = { period: string; reservedTokens: number; settled: boolean };
+type SavedReservation = {
+  period: string;
+  reservedTokens: number;
+  settled: boolean;
+  expiresMs: number;
+  concurrencyReleased: boolean;
+};
 
 export type QuotaBacking = {
   periods: Record<string, PeriodRow>;
@@ -119,10 +129,12 @@ export class MemoryQuotaStore implements QuotaStore {
     period: string;
     clientKey: string;
     nowMs: number;
+    holdMs: number;
     limits: QuotaLimits;
     tokens: number;
   }): Promise<ReserveResult> {
     return this.locked(() => {
+      this.releaseExpired(input.nowMs);
       const windowKey = `${input.clientKey}:${Math.floor(input.nowMs / 60_000)}`;
       const rate = this.backing.rates[windowKey] ?? { count: 0 };
       if (rate.count + 1 > input.limits.ratePerMin) {
@@ -147,7 +159,13 @@ export class MemoryQuotaStore implements QuotaStore {
       };
       this.backing.sequence += 1;
       const id = `hold-${this.backing.sequence}`;
-      this.backing.reservations[id] = { period: input.period, reservedTokens: input.tokens, settled: false };
+      this.backing.reservations[id] = {
+        period: input.period,
+        reservedTokens: input.tokens,
+        settled: false,
+        expiresMs: input.nowMs + input.holdMs,
+        concurrencyReleased: false,
+      };
       return { ok: true, reservation: { id, period: input.period, reservedTokens: input.tokens } };
     });
   }
@@ -157,14 +175,24 @@ export class MemoryQuotaStore implements QuotaStore {
       const saved = this.backing.reservations[input.reservationId];
       if (!saved || saved.settled) return;
       const period = this.backing.periods[saved.period];
-      if (period) {
+      if (period && !saved.concurrencyReleased) {
         period.concurrency = Math.max(0, period.concurrency - 1);
-        if (input.actualTokens !== null) {
-          period.tokens = Math.max(0, period.tokens - saved.reservedTokens + input.actualTokens);
-        }
       }
+      if (period && input.actualTokens !== null) {
+        period.tokens = Math.max(0, period.tokens - saved.reservedTokens + input.actualTokens);
+      }
+      saved.concurrencyReleased = true;
       saved.settled = true;
     });
+  }
+
+  private releaseExpired(nowMs: number) {
+    for (const saved of Object.values(this.backing.reservations)) {
+      if (saved.settled || saved.concurrencyReleased || saved.expiresMs > nowMs) continue;
+      const period = this.backing.periods[saved.period];
+      if (period) period.concurrency = Math.max(0, period.concurrency - 1);
+      saved.concurrencyReleased = true;
+    }
   }
 
   private locked<T>(fn: () => T): Promise<T> {

@@ -115,7 +115,7 @@ Forwarded client IP headers are not trusted. Until the host provides a verified 
 
 The initial reservation is twice the role-labeled request UTF-8 byte length, plus the injector role-labeled byte length, the requested output cap, and a 131,072-token reasoning allowance. This covers separate allowance estimates for both tokenizer calls and completion. It is a conservative estimate, not a provider-enforced limit on hidden reasoning or an exact billing guarantee. Unknown usage retains the estimate. Reliable completion totals plus the retained tokenizer allowance reconcile against the original UTC day.
 
-Timeouts and unhandled failures retain their concurrency reservation because the provider may still be running. A restart does not clear these holds. After confirming that the provider work has stopped, an operator can release a specific outstanding slot without refunding its unknown token usage:
+Timeouts and unhandled failures retain their concurrency reservation because the provider may still be running. A restart does not clear these holds. Concurrency held by a timed-out request is released automatically after the request timeout plus ten minutes, while its tokens stay charged. A timeout before the completion call releases the slot immediately. After confirming that the provider work has stopped, an operator can release a specific outstanding slot without refunding its unknown token usage:
 
 ```sql
 SELECT id, period, reserved_tokens
@@ -124,7 +124,7 @@ FROM workbench_quota_reservation WHERE NOT settled;
 SELECT workbench_reconcile('reviewed-reservation-id', NULL);
 ```
 
-Configure `DATABASE_URL` through the deployment's secret settings. Run `npm run db:migrate` before enabling Grok; migrations 0002 and 0003 create the allowance functions and enforce concurrency across days. The same database must serve every instance. An absent or unavailable store blocks paid execution.
+Configure `DATABASE_URL` through the deployment's secret settings. Run `npm run db:migrate` before enabling Grok; migrations 0002, 0003, and 0004 create the allowance functions, enforce concurrency across days, and expire stale concurrency holds. Migration 0004 must run before deploying this build. The same database must serve every instance. An absent or unavailable store blocks paid execution.
 
 ## Server configuration
 

@@ -17,12 +17,13 @@ export class PostgresQuotaStore implements QuotaStore {
     period: string;
     clientKey: string;
     nowMs: number;
+    holdMs: number;
     limits: { ratePerMin: number; dailyRequestCap: number; dailyTokenCap: number; concurrency: number };
     tokens: number;
   }): Promise<ReserveResult> {
     const windowKey = `${input.clientKey}:${Math.floor(input.nowMs / 60_000)}`;
     const rows = await this.sql.query<{ ok: boolean; reason: string | null; reservation_id: string | null }>(
-      "select ok, reason, reservation_id from workbench_reserve($1, $2, $3, $4, $5, $6, $7)",
+      "select ok, reason, reservation_id from workbench_reserve($1, $2, $3, $4, $5, $6, $7, $8, $9)",
       [
         input.period,
         windowKey,
@@ -31,6 +32,8 @@ export class PostgresQuotaStore implements QuotaStore {
         input.limits.dailyRequestCap,
         input.limits.dailyTokenCap,
         input.limits.concurrency,
+        input.nowMs,
+        input.holdMs,
       ],
     );
     const row = rows[0];
