@@ -3,6 +3,8 @@
  * Hand a staged file over to a path another agent reads, in one step.
  *
  *   node scripts/write-atomic.mjs /workspace/.grok/og.jpg.tmp public/og.jpg
+ *   node scripts/write-atomic.mjs /workspace/.grok/x-banner.jpg.tmp public/x-banner.jpg
+ *   node scripts/write-atomic.mjs /workspace/.grok/site.json.tmp src/lib/og/site.json
  *
  * The brand-asset task writes public/og.jpg and src/lib/og/site.json while the
  * parent may be mid-`npm run build`, so an in-place write can be read

@@ -50,6 +50,15 @@ export type ContextBudget = {
   injectionTokens?: number | null;
   countSource: string;
   blockedReason: string | null;
+  /** Scope for the injector-only tokenize. Omitted on records that never measured it. */
+  injectionCountSource?: string;
+  budgetWarning?: string;
+};
+
+export type QuotaAccounting = {
+  period: string;
+  reservedTokens: number;
+  settledTokens: number | null;
 };
 
 export type Preflight = {
@@ -108,6 +117,8 @@ export type TurnRecord = {
   reasoningEncryptedOmitted: boolean;
   contextBudget: ContextBudget;
   transport: TransportRecord;
+  budgetWarning?: string;
+  quotaAccounting?: QuotaAccounting;
 };
 
 export type Conversation = {
@@ -154,6 +165,8 @@ export type ExchangeResult = {
   countedInputTokens: number | null;
   countSource: string;
   reasoningEncryptedOmitted: boolean;
+  budgetWarning?: string;
+  quotaAccounting?: QuotaAccounting;
 };
 
 export type Clock = {

@@ -86,6 +86,7 @@ export function DialogPanel(props: Props) {
                       : `${turn.executionStatus} · not replayed`}
                 </p>
                 {turn.responseText ? <p className="mt-2 whitespace-pre-wrap break-words">{turn.responseText}</p> : null}
+                {turn.budgetWarning ? <p className="mt-2 text-sm text-warn">{turn.budgetWarning}</p> : null}
                 {turn.responseStatus === "length" ? (
                   <p className="mt-2 text-sm text-muted">
                     Cut off at the max output cap ({turn.settings.maxOutputTokens}). Raise that number in the Injector for a longer reply. Reasoning tokens are not part of this cap.

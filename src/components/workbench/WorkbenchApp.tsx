@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { DiagnosticsPanel } from "@/components/workbench/DiagnosticsPanel";
 import { DialogPanel } from "@/components/workbench/DialogPanel";
 import { InjectorPanel } from "@/components/workbench/InjectorPanel";
-import { STORAGE_KEY, downloadJson, shareExport, type ExportOutcome } from "@/lib/workbench/download";
+import { downloadJson, downloadText, shareExport, type ExportOutcome } from "@/lib/workbench/download";
 import { grokAvailability, runGrokTurn } from "@/lib/workbench/grok-api";
 import { runMockExchange } from "@/lib/workbench/mock";
 import {
@@ -18,11 +18,11 @@ import {
   localBlockReason,
   interpretImport,
   mergeImportedConversations,
-  parsePersisted,
   recoverInterrupted,
   startBaseline,
 } from "@/lib/workbench/session";
 import { sha256Text } from "@/lib/workbench/hash";
+import { loadStored, migrateLegacy, saveStored, type StorageLike } from "@/lib/workbench/storage";
 import {
   emptyState,
   type Draft,
@@ -32,8 +32,18 @@ import {
 
 type PanelId = "injector" | "dialog" | "diagnostics";
 
-function redact(text: string): string {
-  return text.replace(/xai-[A-Za-z0-9_-]{8,}/g, "[redacted]").replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
+function redact(text: string, secret = ""): string {
+  let out = text.replace(/xai-[A-Za-z0-9_-]{8,}/g, "[redacted]").replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
+  if (secret.length >= 8 && out.includes(secret)) out = out.split(secret).join("[redacted]");
+  return out;
+}
+
+function browserStorage(): StorageLike {
+  return {
+    getItem: (key) => localStorage.getItem(key),
+    setItem: (key, value) => localStorage.setItem(key, value),
+    removeItem: (key) => localStorage.removeItem(key),
+  };
 }
 
 export function WorkbenchApp() {
@@ -54,15 +64,61 @@ export function WorkbenchApp() {
   const [composerFocused, setComposerFocused] = useState(false);
   const [exportNote, setExportNote] = useState<string | null>(null);
   const [bundle, setBundle] = useState<{ filename: string; text: string } | null>(null);
+  const [accessToken, setAccessToken] = useState("");
+  const [storageNote, setStorageNote] = useState<string | null>(null);
+  const [storageBlocked, setStorageBlocked] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [rawSaved, setRawSaved] = useState<{ name: string; raw: string } | null>(null);
   const shellRef = useRef<HTMLElement>(null);
   const stateRef = useRef(state);
+  const persistAllowed = useRef(false);
   stateRef.current = state;
 
   useEffect(() => {
     let cancel = false;
     void (async () => {
-      const recovered = await recoverInterrupted(parsePersisted(localStorage.getItem(STORAGE_KEY)), new Date().toISOString());
+      let loaded;
+      try {
+        loaded = loadStored(browserStorage());
+      } catch {
+        if (cancel) return;
+        persistAllowed.current = false;
+        setStorageBlocked(true);
+        setStorageNote("This browser refused to read saved conversations. Nothing on screen has been written over them.");
+        setHydrated(true);
+        return;
+      }
       if (cancel) return;
+      if (loaded.status === "unavailable") {
+        persistAllowed.current = false;
+        setStorageBlocked(true);
+        setStorageNote(loaded.message);
+        setHydrated(true);
+        return;
+      }
+      if (loaded.status === "corrupt") {
+        persistAllowed.current = false;
+        setStorageBlocked(true);
+        setRawSaved({ name: `${loaded.key}.raw.json`, raw: loaded.raw });
+        setStorageNote(`${loaded.message} The original saved bytes were left in place. Export them, or reset saved data before anything new is stored.`);
+        setHydrated(true);
+        return;
+      }
+      const base = loaded.status === "none" ? emptyState() : loaded.state;
+      const recovered = await recoverInterrupted(base, new Date().toISOString());
+      if (cancel) return;
+      if (loaded.status === "legacy") {
+        const migrated = migrateLegacy(browserStorage(), recovered);
+        if (!migrated.ok) {
+          persistAllowed.current = false;
+          setStorageBlocked(true);
+          setStorageNote(`${migrated.message} The older copy is still in this browser. Export the session before you reset saved data.`);
+        } else {
+          persistAllowed.current = true;
+        }
+      } else {
+        persistAllowed.current = true;
+      }
       stateRef.current = recovered;
       setState(recovered);
       setHydrated(true);
@@ -73,9 +129,11 @@ export function WorkbenchApp() {
   }, []);
 
   useEffect(() => {
-    if (!hydrated) return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [hydrated, state]);
+    if (!hydrated || !persistAllowed.current || storageBlocked) return;
+    const saved = saveStored(browserStorage(), state);
+    if (!saved.ok) setStorageNote(saved.message);
+    else setStorageNote(null);
+  }, [hydrated, state, storageBlocked]);
 
   useEffect(() => {
     let cancel = false;
@@ -204,12 +262,17 @@ export function WorkbenchApp() {
             topP: turn.settings.topP,
             seed: turn.settings.seed,
             contextText: turn.frozenContextText,
-            contextRole: turn.settings.deliveryMode === "SYSTEM_SLOT" ? "system" : "user",
+            contextSha256: turn.contextSha256,
+            promptSha256: turn.promptSha256,
+            accessToken,
+            ...(turn.frozenContextText.length > 0
+              ? { contextRole: turn.settings.deliveryMode === "SYSTEM_SLOT" ? "system" : "user" }
+              : {}),
           },
         });
       }
     } catch (error) {
-      const message = redact(error instanceof Error ? error.message : "The send failed.");
+      const message = redact(error instanceof Error ? error.message : "The send failed.", accessToken);
       result = blockedLocally(message, turn.requestedModel);
       result = { ...result, executionStatus: "error", error: { type: "ClientError", message } };
     }
@@ -242,6 +305,19 @@ export function WorkbenchApp() {
       window.removeEventListener("orientationchange", place);
     };
   }, []);
+
+  function resetSaved() {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      return;
+    }
+    persistAllowed.current = true;
+    setStorageBlocked(false);
+    setConfirmReset(false);
+    setRawSaved(null);
+    const saved = saveStored(browserStorage(), stateRef.current);
+    setStorageNote(saved.ok ? null : saved.message);
+  }
 
   async function saveExport(filename: string, value: unknown) {
     const result = await downloadJson(filename, value);
@@ -282,6 +358,36 @@ export function WorkbenchApp() {
           {exportNote}
         </p>
       ) : null}
+      {storageNote ? (
+        <div className="grid gap-2 border-b border-line bg-surface px-4 py-3" role="alert">
+          <p className="text-sm text-warn">{storageNote}</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="min-h-11 rounded-md border border-line px-3 text-sm"
+              onClick={() =>
+                void saveExport("context-engineer-session.json", {
+                  exportSchema: "cew-session-v1",
+                  exportedAt: new Date().toISOString(),
+                  conversations: stateRef.current.conversations,
+                })
+              }
+            >
+              Export session
+            </button>
+            {rawSaved ? (
+              <button type="button" className="min-h-11 rounded-md border border-line px-3 text-sm" onClick={() => void downloadText(rawSaved.name, rawSaved.raw).then(applyExport)}>
+                Export saved data
+              </button>
+            ) : null}
+            {storageBlocked ? (
+              <button type="button" className="min-h-11 rounded-md border border-line px-3 text-sm" onClick={resetSaved}>
+                {confirmReset ? "Confirm reset" : "Reset saved data"}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <nav className="grid grid-cols-3 border-b border-line lg:hidden" aria-label="Panels">
         {(
           [
@@ -310,6 +416,9 @@ export function WorkbenchApp() {
             activeId={state.activeId}
             grokEnabled={grok.enabled}
             grokReason={grok.reason}
+            accessToken={accessToken}
+            onAccessToken={setAccessToken}
+            onClearAccessToken={() => setAccessToken("")}
             confirmDelete={confirmDelete}
             importNote={importNote}
             importProblem={importProblem}

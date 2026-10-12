@@ -50,9 +50,21 @@ Choose System slot or User paste.
 
 Choose Mock or Grok yourself. The server can report that Grok is available. That report does not switch the provider.
 
-Enter the Grok model ID. Pinned ids are grok-4.7, grok-4.6, grok-4.5, grok-4.5-latest, grok-4, grok-4-0709, and grok-4-latest. Any other id is refused.
+Enter the Grok model ID. The pinned ids are grok-4.7, grok-4.6, and grok-4.5. Each has a 500,000-token window.
+
+Those windows were checked against [xAI pricing](https://docs.x.ai/developers/pricing) on 2026-10-12. The page was dated 2026-10-10. grok-4, grok-4-0709, grok-4-latest, and grok-4.5-latest were not on that page. This app refuses them instead of guessing a window.
 
 Send a prompt. Context is injected once. Then only completed successful exchanges. Then the new prompt.
+
+For a normal request with context, Grok makes two tokenize calls, then one completion. Earlier refusals can stop the sequence:
+
+1. Tokenize the injector text alone, with its delivery role.
+2. If that count fits the input budget, tokenize the whole assembled request.
+3. If that count also fits, request the completion.
+
+The second count already includes the injector. Do not add the two counts together.
+
+Empty context records an injector count of zero, then counts the assembled request once.
 
 Open Diagnostics to inspect that turn, or an earlier one. Export the turn or the whole session. Delete removes one saved conversation from this browser.
 
@@ -62,22 +74,68 @@ A new conversation also starts when context text, delivery, provider, or model d
 
 One send can be open on a conversation. A failed, timed-out, blocked, or interrupted turn is stored and is not replayed. Mock is never substituted for a Grok failure.
 
-## Two environment variables
+## Access token
 
-Both are required before a Grok call is attempted. Neither one selects Grok for you.
+Paid Grok is not authorized by the page origin. The server also requires `WORKBENCH_ACCESS_TOKEN`.
+
+Generate one on the machine that holds the deployment secrets. Do not commit it.
+
+```bash
+node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"
+```
+
+The value must be 32 to 256 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`.
+
+When Grok is selected, type that token into the Access token field. It stays in page memory. It is not written to local storage, exports, hashes, or the address bar. Clear removes it from the page.
+
+This token is not an xAI API key. `XAI_API_KEY` stays on the server.
+
+To rotate it, set a new `WORKBENCH_ACCESS_TOKEN` in the deployment environment and restart. The old value stops matching. Type the new value into the page. Nothing in this repository needs to change.
+
+If the variable is missing, too short, or the wrong shape, paid Grok stays locked.
+
+## Shared allowance
+
+Paid Grok also stays locked until `DATABASE_URL` points at Postgres. That database is the shared allowance. An in-memory counter is not a deployment cap. Preview without `DATABASE_URL` can still use Mock.
+
+These variables are optional. Invalid values lock paid Grok instead of falling back silently.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| WORKBENCH_RATE_PER_MIN | 10 | Requests admitted per minute for the whole deployment |
+| WORKBENCH_DAILY_REQUEST_CAP | 200 | Requests admitted per UTC day |
+| WORKBENCH_DAILY_TOKEN_CAP | 500000 | Token allowance reserved per UTC day |
+| WORKBENCH_MAX_CONCURRENCY | 2 | Paid requests allowed to run at once |
+
+Each value must be an integer from 1 up to 1000, 100000, 100000000, and 32, in that order.
+
+The allowance is requests and tokens. It is not a dollar ceiling. The provider can bill categories this estimate does not see. A reservation is held before any xAI call. If usage is missing, that reservation is kept. Reported usage replaces the estimate when it is present.
+
+Forwarded client IP headers are not trusted. The daily caps stay deployment-wide.
+
+## Server configuration
 
 | Variable | Meaning |
 | --- | --- |
 | WORKBENCH_ENABLE_GROK | Set to `1` to allow the adapter |
-| XAI_API_KEY | Server-side credential. It is not shown in the page, the record, or an export |
+| XAI_API_KEY | Server-side xAI credential. It is not shown in the page, the record, or an export |
+| WORKBENCH_ACCESS_TOKEN | Server-side access token. It is not an API key |
+| DATABASE_URL | Postgres connection for the shared allowance |
+| WORKBENCH_GROK_CONTEXT_FLOOR | Optional. It can lower a pinned window. It cannot raise one |
 
-`WORKBENCH_GROK_CONTEXT_FLOOR` is optional. It can lower a pinned window. It cannot raise one.
+Blank temperature, top-p, and seed are omitted. Seed is forwarded when you set one. Max output defaults to 512. Timeout defaults to 30 seconds and covers both token counts plus the completion. There is no retry.
 
-Blank temperature, top-p, and seed are omitted. Seed is forwarded when you set one. Max output defaults to 512. Timeout defaults to 30 seconds and covers tokenize plus the sample. There is no retry.
+Paid Grok is not protected in a deployment until that deployment actually has the flag, the API key, the access token, and `DATABASE_URL`. This repository does not claim that the live app already has those set.
 
 ## Local persistence is not provider retention
 
-Conversations live in this browser under local storage key `cew.sessions.v1`.
+New saves use the browser key `cew.sessions.v2`. Repeated text inside one conversation is stored once. The saved record still rebuilds the original turn, including its three hashes.
+
+Older saves under `cew.sessions.v1` are still read. After a checked copy is written to v2, v1 is left on disk. The app does not restore v1 after you delete a conversation from v2. An older build reads only v1, so it does not treat packed v2 data as an empty session.
+
+If saved data cannot be read, the app leaves those bytes in place, shows a warning on every panel, and can export them. It does not overwrite them until you confirm Reset saved data.
+
+If a later save fails, the page keeps the conversations in memory and shows a warning. Export the session before you close the page. The warning clears after a save succeeds.
 
 Choosing Grok transmits the assembled messages to xAI at `https://api.x.ai`. The request sets `store` to false, sends no tools, and does not write encrypted reasoning content into the local record.
 
@@ -93,13 +151,15 @@ Three hashes are stored on a finalized turn.
 - Prompt SHA-256 of messages-json-v1. That JSON is an array of `{ "role", "content" }` in that key order, with no extra whitespace.
 - Record SHA-256 of the canonical record. Object keys are sorted at every level. The record’s own hash field is left out. The context and prompt hashes stay in.
 
+A budget warning is stored only on turns that have one. Older records are not rewritten to add it.
+
 The fixed vector is `src/lib/workbench/vectors.ts`. Schema `cew-record-v1`.
 
-These hashes identify the app’s records. They do not verify model compliance.
+These hashes identify the app’s records. They do not verify model compliance. A hash sent with a paid request is only a consistency check.
 
 ## What was reused
 
-From [prompt-engineering-workbench](https://github.com/donaldtuttle/prompt-engineering-workbench): the Grok availability rule, pinned windows, floor cap, role-labeled tokenize text, one tokenize then one tool-free sample, disabled retries, `api.x.ai` only, storage requested off, encrypted content omitted, usage mapping, missing usage left null, timeout default, max output default, messages-json hashing style, and the offline mock receipt. The Python gRPC SDK is not embedded here. The same constraints run over `POST /v1/tokenize-text` and `POST /v1/chat/completions`.
+From [prompt-engineering-workbench](https://github.com/donaldtuttle/prompt-engineering-workbench): the Grok availability rule, pinned windows, floor cap, role-labeled tokenize text, two tokenize calls then one tool-free completion when context is present, disabled retries, `api.x.ai` only, storage requested off, encrypted content omitted, usage mapping, missing usage left null, timeout default, max output default, messages-json hashing style, and the offline mock receipt. The Python gRPC SDK is not embedded here. The same constraints run over `POST /v1/tokenize-text` and `POST /v1/chat/completions`.
 
 From [state-dynamics-engine](https://github.com/donaldtuttle/state-dynamics-engine): the diagnostics readout only. The numerical engine is not run.
 
@@ -109,12 +169,18 @@ From [HME](https://github.com/donaldtuttle/HME): the idea of a record identity h
 
 `src/lib/workbench/workbench.test.ts` covers history assembly, baseline isolation, snapshot freeze, the three hashes, missing usage, offline mock, failed turns that are not replayed, and the Grok gate.
 
+`src/lib/workbench/guard.test.ts` covers the access token, the shared allowance, packed storage, and credential leakage in client modules.
+
 ## Run
 
 Node 22.
 
 ```bash
-npm install
+npm ci
+npm test
+npm run typecheck
+npm run lint
+npm run build
 npm run dev
 ```
 
@@ -122,11 +188,12 @@ The dev server listens on port 8080.
 
 Leave `.grok/app-env.json` in place. It keeps sign-in off. Without it, the shell treats auth as on.
 
-Grok stays off until the process has both `WORKBENCH_ENABLE_GROK=1` and `XAI_API_KEY`. Set the key in the environment. Do not commit it.
+Do not commit `XAI_API_KEY` or `WORKBENCH_ACCESS_TOKEN`.
 
 ```bash
 npm test
 npm run typecheck
+npm run lint
 npm run build
 ```
 

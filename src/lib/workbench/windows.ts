@@ -1,17 +1,20 @@
 /* Copyright (c) 2026 Donald Tuttle. All rights reserved.
    Proprietary. No license is granted to copy, modify, or distribute.
-   Window table adapted from prompt-engineering-workbench workbench/context_windows.py.
-   Unknown Grok ids are refused. An env floor can lower a window. It cannot raise one. */
+   Context windows checked against https://docs.x.ai/developers/pricing
+   on 2026-10-12 (page dated 2026-10-10).
+   grok-4.7, grok-4.6, and grok-4.5 are listed at 500,000 tokens.
+   grok-4, grok-4-0709, grok-4-latest, and grok-4.5-latest were not on
+   that page. They are not pinned here. An unknown id is refused.
+   An env floor can lower a window. It cannot raise one. */
 
 export const GROK_WINDOWS: Record<string, number> = {
   "grok-4.7": 500_000,
   "grok-4.6": 500_000,
   "grok-4.5": 500_000,
-  "grok-4.5-latest": 500_000,
-  "grok-4": 256_000,
-  "grok-4-0709": 256_000,
-  "grok-4-latest": 256_000,
 };
+
+export const WINDOW_SOURCE = "https://docs.x.ai/developers/pricing";
+export const WINDOW_VERIFIED = "2026-10-12";
 
 export function grokModelWindow(model: string): number {
   if (!Object.hasOwn(GROK_WINDOWS, model)) {

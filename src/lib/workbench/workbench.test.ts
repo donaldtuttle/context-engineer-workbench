@@ -144,7 +144,7 @@ describe("conversations", () => {
   });
 
   it("starts a new conversation when context, delivery, provider, or model changes, and keeps the old record", async () => {
-    let state = await succeed(withDraft({ text: "PROJECT", name: "one" }), "hello");
+    const state = await succeed(withDraft({ text: "PROJECT", name: "one" }), "hello");
     const original = state.activeId;
     for (const patch of [
       { text: "OTHER" },
@@ -538,26 +538,27 @@ describe("import", () => {
   });
 
   it("rejects null byte counts and invalid nested usage, budget, or settings", async () => {
-    const bytes = structuredClone(turn);
-    bytes.preflight = { ...bytes.preflight, contextUtf8Bytes: null };
+    const asUnknown = (value: unknown) => JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+    const bytes = asUnknown(turn);
+    bytes.preflight = { ...(bytes.preflight as Record<string, unknown>), contextUtf8Bytes: null };
     const byteImport = await interpretImport("turn.json", JSON.stringify(bytes));
     assert.equal(byteImport.kind, "error");
     if (byteImport.kind === "error") assert.match(byteImport.note, /contextUtf8Bytes/);
 
-    const usage = structuredClone(turn);
+    const usage = asUnknown(turn);
     usage.providerUsage = { input_tokens: null };
     const usageImport = await interpretImport("turn.json", JSON.stringify(usage));
     assert.equal(usageImport.kind, "error");
     if (usageImport.kind === "error") assert.match(usageImport.note, /input_tokens|providerUsage/);
 
-    const budget = structuredClone(turn);
-    budget.contextBudget = { ...budget.contextBudget, budget: "wide" };
+    const budget = asUnknown(turn);
+    budget.contextBudget = { ...(budget.contextBudget as Record<string, unknown>), budget: "wide" };
     const budgetImport = await interpretImport("turn.json", JSON.stringify(budget));
     assert.equal(budgetImport.kind, "error");
     if (budgetImport.kind === "error") assert.match(budgetImport.note, /budget/);
 
-    const counted = structuredClone(turn);
-    counted.preflight = { ...counted.preflight, countedInputTokens: -1 };
+    const counted = asUnknown(turn);
+    counted.preflight = { ...(counted.preflight as Record<string, unknown>), countedInputTokens: -1 };
     const countedImport = await interpretImport("turn.json", JSON.stringify(counted));
     assert.equal(countedImport.kind, "error");
     if (countedImport.kind === "error") assert.match(countedImport.note, /countedInputTokens/);
@@ -600,10 +601,12 @@ describe("grok adapter", () => {
     assert.match(result.error?.message ?? "", /No pinned context window/);
   });
 
-  it("pins known windows and refuses to raise them", () => {
+  it("pins known windows and refuses unverified ids", () => {
     assert.equal(grokModelWindow("grok-4.7"), 500_000);
-    assert.equal(grokModelWindow("grok-4"), 256_000);
-    assert.equal(grokModelWindow("grok-4.5-latest"), 500_000);
+    assert.equal(grokModelWindow("grok-4.6"), 500_000);
+    assert.equal(grokModelWindow("grok-4.5"), 500_000);
+    assert.throws(() => grokModelWindow("grok-4"), /No pinned context window/);
+    assert.throws(() => grokModelWindow("grok-4.5-latest"), /No pinned context window/);
     assert.throws(() => grokModelWindow("grok-4.1"), /No pinned context window/);
     assert.deepEqual(cappedWindow(500_000, undefined), { floor: 500_000, source: "model" });
     assert.deepEqual(cappedWindow(500_000, "1000"), { floor: 1000, source: "env_cap" });
@@ -678,6 +681,8 @@ describe("grok adapter", () => {
     assert.equal(result.contextBudget.contextFloorSource, "model");
     assert.equal(result.countedInputTokens, 2);
     assert.equal(result.contextBudget.injectionTokens, 0);
+    assert.match(result.contextBudget.injectionCountSource ?? "", /explicitly zero/);
+    assert.notEqual(result.contextBudget.injectionCountSource, result.countSource);
   });
 
   it("counts injector text and checks it against the input budget before the sample", async () => {
@@ -712,6 +717,9 @@ describe("grok adapter", () => {
     assert.equal(result.executionStatus, "success");
     assert.equal(result.contextBudget.injectionTokens, 2);
     assert.equal(result.countedInputTokens, 4);
+    assert.match(result.contextBudget.injectionCountSource ?? "", /injector/);
+    assert.match(result.countSource, /assembled/);
+    assert.notEqual(result.contextBudget.injectionCountSource, result.countSource);
   });
 
   it("blocks when the injector text alone exceeds the input budget", async () => {
@@ -751,24 +759,45 @@ describe("grok adapter", () => {
     assert.equal(result.contextBudget.budget, 2);
   });
 
-  it("fails the turn when server usage exceeds the budget and keeps a null usage null", async () => {
+  it("keeps a completed reply when server usage exceeds the budget and keeps a null usage null", async () => {
     const { fetchImpl } = fetchSpy((_url, _body, nth) => {
       if (nth === 1) return { token_ids: [{ token_id: 4 }] };
       return {
         id: "resp-2",
         model: "grok-4.5",
-        choices: [{ finish_reason: "stop", message: { content: "secret-cipher-should-not-matter", encrypted_content: "cipher-blob-abc" } }],
+        choices: [{ finish_reason: "stop", message: { content: "kept-reply", encrypted_content: "cipher-blob-abc" } }],
         usage: { prompt_tokens: 50, completion_tokens: 3, total_tokens: 53, completion_tokens_details: { reasoning_tokens: 1 } },
       };
     });
+    const began = await beginSend(withDraft({ provider: "grok", model: "grok-4.5", maxOutputTokens: 16, text: "" }), "ping", clock());
+    assert.equal(began.ok, true);
+    if (!began.ok) return;
     const over = await runGrokExchange(
-      { model: "grok-4", messages: [{ role: "user", content: "ping" }], timeoutSeconds: 30, maxOutputTokens: 16, temperature: null, topP: null, seed: null },
+      { model: "grok-4.5", messages: [{ role: "user", content: "ping" }], timeoutSeconds: 30, maxOutputTokens: 16, temperature: null, topP: null, seed: null },
       { ...enabled, contextFloor: "40" },
       fetchImpl,
     );
-    assert.equal(over.executionStatus, "error");
+    assert.equal(over.executionStatus, "success");
+    assert.equal(over.responseText, "kept-reply");
+    assert.equal(over.countedInputTokens, 1);
+    assert.equal(over.contextBudget.budget, 24);
+    assert.match(over.budgetWarning ?? "", /50/);
+    assert.match(over.budgetWarning ?? "", /24/);
     assert.equal(over.providerUsage?.input_tokens, 50);
     assert.equal(over.providerUsage?.reasoning_tokens, 1);
+    assert.equal(JSON.stringify(over).includes("cipher-blob-abc"), false);
+    const sealed = await commitResult(began.state, began.conversationId, began.turnId, over, LATER);
+    const record = activeConversation(sealed)?.turns[0];
+    assert.equal(record?.executionStatus, "success");
+    assert.equal(record?.responseText, "kept-reply");
+    assert.equal(record?.preflight.countedInputTokens, 1);
+    assert.match(record?.budgetWarning ?? "", /not blocked before/);
+    const exported = JSON.stringify(record);
+    const imported = await interpretImport(`turn-${record?.id}.json`, exported);
+    assert.equal(imported.kind, "conversations");
+    if (imported.kind !== "conversations") return;
+    assert.equal(imported.conversations[0]?.turns[0]?.budgetWarning, record?.budgetWarning);
+    assert.equal(imported.conversations[0]?.turns[0]?.recordSha256, record?.recordSha256);
     assert.equal(readUsage(undefined), null);
     assert.equal(readUsage({}), null);
   });

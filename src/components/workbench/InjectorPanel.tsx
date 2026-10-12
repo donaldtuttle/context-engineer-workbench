@@ -15,6 +15,9 @@ type Props = {
   activeId: string | null;
   grokEnabled: boolean;
   grokReason: string | null;
+  accessToken: string;
+  onAccessToken: (value: string) => void;
+  onClearAccessToken: () => void;
   confirmDelete: boolean;
   importNote: string | null;
   importProblem: boolean;
@@ -140,6 +143,29 @@ export function InjectorPanel(props: Props) {
           Availability does not switch the selection. A failed Grok call stays a failure.
         </p>
       </fieldset>
+
+      {draft.provider === "grok" ? (
+        <div className="grid gap-2">
+          <label className="grid gap-2">
+            <span className="text-sm text-muted">Access token</span>
+            <input
+              className={field}
+              type="password"
+              name="workbench-access-token"
+              autoComplete="off"
+              spellCheck={false}
+              value={props.accessToken}
+              onChange={(event) => props.onAccessToken(event.target.value)}
+            />
+          </label>
+          <button type="button" className="min-h-11 rounded-md border border-line px-3 text-sm" onClick={props.onClearAccessToken}>
+            Clear access token
+          </button>
+          <p className="text-sm text-muted">
+            This token grants access to this deployment. It is not an xAI API key. It stays in this page’s memory and is not saved in the browser.
+          </p>
+        </div>
+      ) : null}
 
       <label className="grid gap-2">
         <span className="text-sm text-muted">Grok model ID</span>

@@ -471,7 +471,7 @@ function nullableNumber(value: unknown): boolean {
   return value === null || (typeof value === "number" && Number.isFinite(value));
 }
 
-function nonNegativeInt(value: unknown): boolean {
+function nonNegativeInt(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
@@ -589,6 +589,21 @@ function problemsForTurn(value: unknown, label: string): string[] {
       problems.push(`${id} transport is invalid`);
     }
   } else problems.push(`${id} transport is invalid`);
+  if (Object.hasOwn(record, "budgetWarning") && typeof record.budgetWarning !== "string") {
+    problems.push(`${id} budgetWarning is invalid`);
+  }
+  if (Object.hasOwn(record, "quotaAccounting")) {
+    const quota = asRecord(record.quotaAccounting);
+    if (!quota || typeof quota.period !== "string" || !nonNegativeInt(quota.reservedTokens) || !nullableNonNegativeInt(quota.settledTokens)) {
+      problems.push(`${id} quotaAccounting is invalid`);
+    }
+  }
+  if (Object.hasOwn(budget ?? {}, "injectionCountSource") && typeof budget?.injectionCountSource !== "string") {
+    problems.push(`${id} contextBudget injectionCountSource is invalid`);
+  }
+  if (Object.hasOwn(budget ?? {}, "budgetWarning") && typeof budget?.budgetWarning !== "string") {
+    problems.push(`${id} contextBudget budgetWarning is invalid`);
+  }
   return problems;
 }
 

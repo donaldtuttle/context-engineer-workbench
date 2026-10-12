@@ -2,7 +2,9 @@
    Proprietary. No license is granted to copy, modify, or distribute.
    Behavior adapted from prompt-engineering-workbench workbench/providers.py
    GrokProvider and _XaiTransport. This runtime has no Python gRPC SDK.
-   The call sequence is preserved: one tokenize, then one tool-free sample.
+   The call sequence for nonempty context is two tokenize calls, then one
+   tool-free completion, unless an earlier check refuses the request.
+   Empty context records an explicit zero injector count and one tokenize.
    Host is api.x.ai. Retries stay off. store is false. Tools are omitted.
    Encrypted reasoning content is not written into the local record.
    A failure is returned as a failure. This module never calls the mock. */
@@ -270,6 +272,7 @@ export async function runGrokExchange(
     budget,
     countedInputTokens: null as number | null,
     injectionTokens: contextText.length > 0 ? (null as number | null) : 0,
+    injectionCountSource: contextText.length > 0 ? undefined : "empty context; injector tokens are explicitly zero",
     countSource: "not_counted",
     blockedReason: null as string | null,
   };
@@ -322,6 +325,7 @@ export async function runGrokExchange(
         grokPromptText([{ role: input.contextRole ?? "user", content: contextText }]),
       );
       baseBudget.injectionTokens = injectionTokens;
+      baseBudget.injectionCountSource = "xai.tokenize injector text with its delivery role; chat-template overhead is not included";
       if (injectionTokens > budget) {
         const message = `Injector text exceeds the input budget (${injectionTokens} injection tokens, budget ${budget}). Nothing further was sent.`;
         return failure("blocked", "ContextWindowError", message, {
@@ -354,7 +358,7 @@ export async function runGrokExchange(
   const gate = {
     ...baseBudget,
     countedInputTokens: counted,
-    countSource: "xai.tokenize message text; chat-template overhead is not included",
+    countSource: "xai.tokenize assembled request text; chat-template overhead is not included",
   };
   if (counted > budget) {
     const message = `Grok input exceeds the context window (${counted} input tokens, budget ${budget})`;
@@ -387,16 +391,10 @@ export async function runGrokExchange(
   const body = asRecord(chat.json);
   const usage = readUsage(body?.usage);
   const serverIn = usage?.input_tokens;
-  if (typeof serverIn === "number" && serverIn > budget) {
-    const message = `Grok input exceeds the context window (${serverIn} input tokens, budget ${budget})`;
-    const usageGate = {
-      ...gate,
-      countedInputTokens: serverIn,
-      countSource: "xai.usage.prompt_tokens",
-      blockedReason: message,
-    };
-    return failure("error", "ContextWindowError", message, usageGate, { providerUsage: usage });
-  }
+  const budgetWarning =
+    typeof serverIn === "number" && serverIn > budget
+      ? `Provider reported ${serverIn} input tokens after a completed reply. The calculated input allowance was ${budget}. The preflight count was not changed. This request was not blocked before it ran.`
+      : undefined;
 
   const choice = Array.isArray(body?.choices) ? asRecord(body.choices[0]) : null;
   const message = asRecord(choice?.message);
@@ -433,6 +431,7 @@ export async function runGrokExchange(
       countSource: gate.countSource,
       contextBudget: gate,
       ...receipt,
+      ...(budgetWarning ? { budgetWarning } : {}),
     };
   }
   return failure("error", "ProviderError", "Grok returned a malformed response", gate, receipt);

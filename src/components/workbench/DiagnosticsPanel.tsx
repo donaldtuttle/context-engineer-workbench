@@ -76,6 +76,11 @@ export function DiagnosticsPanel(props: Props) {
           </p>
 
           <Readout turn={turn} />
+          {turn.budgetWarning ? (
+            <p className="text-sm text-warn" role="status">
+              {turn.budgetWarning}
+            </p>
+          ) : null}
           <Meter turn={turn} />
 
           <p className="text-sm text-muted">
@@ -139,13 +144,17 @@ function Readout(props: { turn: TurnRecord }) {
     ["Messages", String(turn.preflight.messageCount)],
     ["Context bytes", turn.preflight.contextUtf8Bytes.toLocaleString()],
     ["Injection tokens", injection === undefined || injection === null ? "not counted" : injection.toLocaleString()],
+    ["Injection count scope", turn.contextBudget.injectionCountSource ?? "not recorded"],
     ["Prompt bytes", turn.preflight.promptUtf8Bytes.toLocaleString()],
     ["Counted input tokens", turn.preflight.countedInputTokens === null ? "not counted" : turn.preflight.countedInputTokens.toLocaleString()],
-    ["Count source", turn.preflight.countSource],
+    ["Full-request count scope", turn.preflight.countSource],
     ["Provider input", usage?.input_tokens === undefined ? "not reported" : usage.input_tokens.toLocaleString()],
     ["Provider output", usage?.output_tokens === undefined ? "not reported" : usage.output_tokens.toLocaleString()],
     ["Reasoning tokens", usage?.reasoning_tokens === undefined ? "not reported" : usage.reasoning_tokens.toLocaleString()],
     ["Provider total", usage?.total_tokens === undefined ? "not reported" : usage.total_tokens.toLocaleString()],
+    ["Quota period", turn.quotaAccounting?.period ?? "not reserved"],
+    ["Quota reserved tokens", turn.quotaAccounting ? turn.quotaAccounting.reservedTokens.toLocaleString() : "not reserved"],
+    ["Quota settled tokens", !turn.quotaAccounting ? "not reserved" : turn.quotaAccounting.settledTokens === null ? "kept the reservation" : turn.quotaAccounting.settledTokens.toLocaleString()],
     ["Window", turn.contextBudget.modelContextWindow === null ? "not measured" : turn.contextBudget.modelContextWindow.toLocaleString()],
     ["Floor", turn.contextBudget.contextFloor === null ? "not measured" : `${turn.contextBudget.contextFloor.toLocaleString()} (${turn.contextBudget.contextFloorSource})`],
     ["Input budget", turn.contextBudget.budget === null ? "not measured" : turn.contextBudget.budget.toLocaleString()],

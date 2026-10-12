@@ -41,6 +41,8 @@ export async function finalizeTurn(
       countedInputTokens: result.countedInputTokens,
       countSource: result.countSource,
     },
+    ...(result.budgetWarning ? { budgetWarning: result.budgetWarning } : {}),
+    ...(result.quotaAccounting ? { quotaAccounting: result.quotaAccounting } : {}),
     recordSha256: null,
   };
   const recordSha256 = await hashRecord(next);

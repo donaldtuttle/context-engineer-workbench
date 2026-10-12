@@ -62,8 +62,7 @@ function saveWithAnchor(file: File): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-export async function downloadJson(filename: string, value: unknown): Promise<ExportOutcome> {
-  const text = JSON.stringify(value, null, 2);
+export async function downloadText(filename: string, text: string): Promise<ExportOutcome> {
   const name = jsonFilename(filename);
   const file = new File([text], name, { type: "application/json" });
 
@@ -81,6 +80,10 @@ export async function downloadJson(filename: string, value: unknown): Promise<Ex
 
   saveWithAnchor(file);
   return { kind: "downloaded", message: "Download started." };
+}
+
+export async function downloadJson(filename: string, value: unknown): Promise<ExportOutcome> {
+  return downloadText(filename, JSON.stringify(value, null, 2));
 }
 
 export async function shareExport(filename: string, text: string): Promise<"shared" | "cancelled" | "unavailable"> {

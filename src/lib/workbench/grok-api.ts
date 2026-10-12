@@ -1,117 +1,86 @@
 /* Copyright (c) 2026 Donald Tuttle. All rights reserved.
    Proprietary. No license is granted to copy, modify, or distribute.
-   The API key is read only inside this server handler. It is never returned. */
+   The API key and the access token are read only inside server handlers.
+   Neither value is returned. Origin is checked and is not authorization. */
 
 import { createServerFn } from "@tanstack/react-start";
-import { runGrokExchange, type GrokCallInput, type GrokEnv } from "./grok-adapter.ts";
-import type { ChatMessage, ExchangeResult } from "./types.ts";
+import type { ExchangeResult } from "./types.ts";
+import type { PaidRequest } from "./paid-turn.ts";
+import type { QuotaStore } from "./limits.ts";
 
-export function readGrokEnv(): GrokEnv {
+function refusal(message: string): ExchangeResult {
   return {
-    enableFlag: process.env.WORKBENCH_ENABLE_GROK,
-    apiKey: process.env.XAI_API_KEY,
-    contextFloor: process.env.WORKBENCH_GROK_CONTEXT_FLOOR,
-  };
-}
-
-function isRole(value: unknown): value is ChatMessage["role"] {
-  return value === "system" || value === "user" || value === "assistant";
-}
-
-function parseCall(data: unknown): GrokCallInput | { error: string } {
-  if (!data || typeof data !== "object") return { error: "Invalid Grok request" };
-  const body = data as Record<string, unknown>;
-  if (typeof body.model !== "string" || !body.model.trim()) return { error: "Enter a Grok model ID." };
-  if (!Array.isArray(body.messages) || body.messages.length < 1 || body.messages.length > 200) {
-    return { error: "Assembled messages were missing." };
-  }
-  const messages: ChatMessage[] = [];
-  for (const item of body.messages) {
-    if (!item || typeof item !== "object") return { error: "Assembled messages were unreadable." };
-    const message = item as Record<string, unknown>;
-    if (!isRole(message.role) || typeof message.content !== "string") {
-      return { error: "Assembled messages were unreadable." };
-    }
-    messages.push({ role: message.role, content: message.content });
-  }
-  const timeoutSeconds = body.timeoutSeconds;
-  const maxOutputTokens = body.maxOutputTokens;
-  if (typeof timeoutSeconds !== "number" || timeoutSeconds < 0.05 || timeoutSeconds > 300) {
-    return { error: "Timeout must be between 0.05 and 300 seconds." };
-  }
-  if (typeof maxOutputTokens !== "number" || !Number.isInteger(maxOutputTokens) || maxOutputTokens < 16 || maxOutputTokens > 8192) {
-    return { error: "Max output must be an integer from 16 to 8192." };
-  }
-  const temperature = body.temperature;
-  const topP = body.topP;
-  const seed = body.seed;
-  if (!(temperature === null || (typeof temperature === "number" && temperature >= 0 && temperature <= 2))) {
-    return { error: "Temperature must be empty or between 0 and 2." };
-  }
-  if (!(topP === null || (typeof topP === "number" && topP >= 0 && topP <= 1))) {
-    return { error: "Top-p must be empty or between 0 and 1." };
-  }
-  if (!(seed === null || (typeof seed === "number" && Number.isInteger(seed)))) {
-    return { error: "Seed must be empty or an integer." };
-  }
-  const contextText = body.contextText === undefined ? "" : body.contextText;
-  if (typeof contextText !== "string") return { error: "Injector text was unreadable." };
-  let contextRole: "system" | "user" | undefined;
-  if (contextText.length > 0) {
-    if (body.contextRole !== "system" && body.contextRole !== "user") {
-      return { error: "Injector delivery was unreadable." };
-    }
-    contextRole = body.contextRole;
-  }
-  return {
-    model: body.model,
-    messages,
-    timeoutSeconds,
-    maxOutputTokens,
-    temperature,
-    topP,
-    seed,
-    contextText,
-    contextRole,
+    executionStatus: "blocked",
+    responseText: null,
+    responseStatus: null,
+    error: { type: "AccessError", message },
+    returnedModel: null,
+    providerResponseId: null,
+    providerUsage: null,
+    reasoningEncryptedOmitted: false,
+    countedInputTokens: null,
+    countSource: "not_counted",
+    contextBudget: {
+      model: "",
+      contextFloor: null,
+      modelContextWindow: null,
+      contextFloorSource: "unavailable",
+      budget: null,
+      countedInputTokens: null,
+      countSource: "not_counted",
+      blockedReason: message,
+    },
   };
 }
 
 export const grokAvailability = createServerFn({ method: "GET" }).handler(async () => {
-  const env = readGrokEnv();
-  const enabled = env.enableFlag === "1" && Boolean(env.apiKey);
-  return {
-    enabled,
-    reason: enabled ? null : "Requires WORKBENCH_ENABLE_GROK=1 and server-side XAI_API_KEY",
-  };
+  const { accessConfigError } = await import("./access.ts");
+  const { readPaidEnv } = await import("./paid-env.server.ts");
+  const env = readPaidEnv();
+  const access = accessConfigError(env.accessToken);
+  const enabled = env.enableFlag === "1" && Boolean(env.apiKey) && !access && env.sharedStore && env.quota?.ok === true;
+  let reason: string | null = null;
+  if (!enabled) {
+    if (env.enableFlag !== "1" || !env.apiKey) reason = "Requires WORKBENCH_ENABLE_GROK=1 and server-side XAI_API_KEY";
+    else if (access) reason = access;
+    else if (!env.sharedStore) reason = "Paid Grok is locked until DATABASE_URL points at the shared quota store.";
+    else reason = env.quota && !env.quota.ok ? env.quota.reason : "Paid Grok is not available.";
+  }
+  return { enabled, reason };
 });
 
 export const runGrokTurn = createServerFn({ method: "POST" })
   .validator((data: unknown) => data)
   .handler(async ({ data }): Promise<ExchangeResult> => {
-    const parsed = parseCall(data);
-    if ("error" in parsed) {
-      return {
-        executionStatus: "error",
-        responseText: null,
-        responseStatus: null,
-        error: { type: "ValidationError", message: parsed.error },
-        returnedModel: null,
-        providerResponseId: null,
-        providerUsage: null,
-        reasoningEncryptedOmitted: false,
-        countedInputTokens: null,
-        countSource: "not_counted",
-        contextBudget: {
-          model: "",
-          contextFloor: null,
-          modelContextWindow: null,
-          contextFloorSource: "invalid_request",
-          budget: null,
-          countedInputTokens: null,
-          countSource: "not_counted",
-          blockedReason: parsed.error,
-        },
-      };
+    const { getRequest } = await import("@tanstack/react-start/server");
+    const { executePaidTurn } = await import("./paid-turn.ts");
+    const { readPaidEnv } = await import("./paid-env.server.ts");
+    let request: PaidRequest = { origin: null, host: "" };
+    let headers: { get(name: string): string | null } = { get: () => null };
+    try {
+      const incoming = getRequest();
+      const url = new URL(incoming.url);
+      request = { origin: incoming.headers.get("origin"), host: url.host };
+      headers = incoming.headers;
+    } catch {
+      request = { origin: null, host: "" };
     }
-    return runGrokExchange(parsed, readGrokEnv(), fetch);
+    let store: QuotaStore | null = null;
+    if (process.env.DATABASE_URL?.trim()) {
+      try {
+        const { getSql } = await import("@/lib/db");
+        const { PostgresQuotaStore } = await import("./quota-store.server.ts");
+        store = new PostgresQuotaStore(await getSql());
+      } catch {
+        return refusal("The shared limiter is unavailable. Paid Grok was not called.");
+      }
+    }
+    return executePaidTurn({
+      data,
+      env: readPaidEnv(),
+      fetchImpl: fetch,
+      store,
+      request,
+      headers,
+    });
   });

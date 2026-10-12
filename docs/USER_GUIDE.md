@@ -39,9 +39,11 @@ The SHA-256 value below the box is a fingerprint of the text. It changes when th
 
 Leave **System slot** selected for this walkthrough.
 
-Select **Grok** if the app says the Grok adapter is available on the server. The provider must be selected explicitly; availability does not switch it for you. Use a supported ID from the **Grok model ID** suggestions.
+Select **Grok** if the app says the Grok adapter is available on the server. The provider must be selected explicitly; availability does not switch it for you. Use a supported ID from the **Grok model ID** suggestions. The suggestions are grok-4.7, grok-4.6, and grok-4.5.
 
-Select **Mock** to try the workflow without an AI call. Mock produces a JSON receipt containing request information. It does not interpret the lamp brief or answer your question.
+When Grok is selected, the **Access token** field appears. Type the deployment token your operator gave you. It is not an xAI API key. It stays in this page’s memory until you press **Clear access token** or reload the page. It is not saved with the conversation.
+
+Select **Mock** to try the workflow without an AI call and without an access token. Mock produces a JSON receipt containing request information. It does not interpret the lamp brief or answer your question.
 
 ### 3. Ask a question
 
@@ -114,16 +116,24 @@ These options change how the model receives the background. Neither guarantees c
 | **Record SHA-256** | Fingerprint of the finalized turn record. |
 | **Context / Prompt bytes** | Text size in bytes, not tokens. |
 | **Injection tokens** | The count for the context text alone, when available. |
+| **Injection count scope** | What that injector count measured. |
 | **Counted input tokens** | The preflight count of the assembled request, including context and history. |
+| **Full-request count scope** | What the assembled-request count measured. This is not the provider’s usage report. |
 | **Provider input / output / total** | Usage returned by the provider, when available. |
 | **Input budget** | The configured capacity left for input after reserving the maximum output allowance. |
 | **Requested / Returned model** | The model requested by the app and the identity returned by the provider. |
 
 Tokens are pieces of text, not necessarily whole words. Injection tokens are already included in the whole-request count; do not add them again.
 
+A normal Grok request with context makes two tokenize calls before the reply: the injector alone, then the whole request. Empty context records zero injector tokens and then tokenizes the request once.
+
 Preflight counts and provider usage have different measurement scopes. The preflight count does not establish exact chat-template overhead. Read the measurement note below the counts. “Not counted” or “not reported” means the value is unavailable, not zero.
 
+If the provider later reports more input than the calculated allowance, a completed reply stays on screen. Diagnostics shows a budget warning with both numbers. The preflight count is not replaced. The turn can still be used as history. A reply cut off at the output cap stays incomplete and is not replayed. A malformed response stays an error.
+
 The budget bar shows counted input against the input budget. It is not a score for answer quality, accuracy, or instruction following.
+
+Quota rows, when present, are the app’s reserved allowance. They are not the provider’s bill and they are not a dollar amount.
 
 ## Import, export, and deletion
 
@@ -141,26 +151,38 @@ A GitHub URL pasted into Context is only text; this version does not fetch repos
 
 ## Storage and data flow
 
-Conversations are saved in the current browser’s local storage. They do not automatically follow you to another browser or device. Clearing site data can remove them; export copies you want to keep.
+Conversations are saved in the current browser. They do not automatically follow you to another browser or device. Clearing site data can remove them; export copies you want to keep.
+
+The current save format is a packed copy under a new browser key. Repeated context is stored once. Each turn still rebuilds its original text and hashes. Older unpacked saves are still opened. After the new copy checks out, the older copy is left in place. Deleting a conversation does not bring that older copy back.
+
+If the browser cannot read a save, a warning stays visible on every panel. You can export the raw saved bytes. The app does not replace them until you confirm **Reset saved data**.
+
+If a save fails after that, the warning says the latest changes are only on this page. Export the session before you close it. The warning goes away after a save succeeds.
 
 Mock execution makes no model-provider call. Loading the hosted website can still use the network.
 
-For Grok, the app sends the assembled context, successful conversation history, and latest prompt through its server to xAI. The API credential stays on the server. The adapter requests storage off, but that flag is not a guarantee about all provider-side retention. Deleting a local conversation does not delete already exported files or establish deletion at the provider.
+For Grok, the app sends the assembled context, successful conversation history, and latest prompt through its server to xAI. The API credential stays on the server. The access token is checked there and is not written into the record. The adapter requests storage off, but that flag is not a guarantee about all provider-side retention. Deleting a local conversation does not delete already exported files or establish deletion at the provider.
 
 ## If something does not work
 
-**Grok is unavailable:** The server needs Grok enabled and an API key configured. Visitors do not enter the key in the Context box. You can explicitly select Mock to try the record workflow.
+**Grok is unavailable:** The server needs Grok enabled, an API key, an access token, and a shared database for the request allowance. Visitors do not enter the API key in the Context box. You can explicitly select Mock to try the record workflow. A refused Grok request stays a failure. It does not switch to Mock.
 
 **The response is a JSON receipt:** Mock is selected. Switch to Grok for an AI answer when available.
 
-**The request is blocked:** Read the reason in Dialog and the budget information in Diagnostics. Reduce the context, start a fresh conversation to remove accumulated history, or reduce the output allowance where appropriate. The app does not silently truncate the request.
+**The request is blocked:** Read the reason in Dialog and the budget information in Diagnostics. Reduce the context, start a fresh conversation to remove accumulated history, or reduce the output allowance where appropriate. The app does not silently truncate the request. A daily allowance message means the deployment limit was reached. That limit is a request and token allowance, not a dollar cap.
 
 **The response is incomplete or has status `length`:** The output limit was reached. Open **Request settings** in Injector, increase **Max output tokens** within the supported range, and submit the question again. The partial response stays recorded and is not included in subsequent history.
+
+**A budget warning appears on a finished reply:** The reply was received. The provider’s input count was higher than the allowance calculated before the call. The reply and the original count are both kept.
 
 **A request fails or times out:** Inspect the error. Grok failures do not silently become Mock responses. If you retry, it is a new request.
 
 **A hash matches but the answer is wrong:** A matching hash confirms record consistency. It does not check the answer against the context.
 
+**A storage warning is showing:** The conversations on screen may not be saved. Export the session. If the warning is about unreadable data, export the saved bytes before you confirm a reset.
+
 ## Running your own copy
 
-See [Run](../README.md#run) and [Two environment variables](../README.md#two-environment-variables) in the README for setup and server-side Grok configuration.
+See [Run](../README.md#run), [Access token](../README.md#access-token), and [Shared allowance](../README.md#shared-allowance) in the README.
+
+Paid Grok on a deployment is not protected until that deployment has `WORKBENCH_ENABLE_GROK=1`, `XAI_API_KEY`, `WORKBENCH_ACCESS_TOKEN`, and `DATABASE_URL`. Setting them in a local preview is a separate step from the hosted app.
