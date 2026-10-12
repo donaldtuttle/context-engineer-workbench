@@ -65,8 +65,8 @@ export function buildChatBody(input: GrokCallInput): Record<string, unknown> {
   return body;
 }
 
-function redact(text: string): string {
-  return text
+function redact(text: string, secret = ""): string {
+  return (secret ? text.split(secret).join("[redacted]") : text)
     .replace(/xai-[A-Za-z0-9_-]{8,}/g, "[redacted]")
     .replace(/Bearer\s+\S+/gi, "Bearer [redacted]");
 }
@@ -78,7 +78,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function intField(source: unknown, name: string): number | undefined {
   const record = asRecord(source);
   const value = record?.[name];
-  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 export function readTokenCount(payload: unknown): number {
@@ -181,6 +181,7 @@ async function postJson(
   try {
     const response = await fetchImpl(url, {
       method: "POST",
+      redirect: "error",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
@@ -190,7 +191,7 @@ async function postJson(
     });
     const text = await response.text();
     if (!response.ok) {
-      return { ok: false, timeout: false, status: response.status, detail: redact(text).slice(0, 500) };
+      return { ok: false, timeout: false, status: response.status, detail: redact(text, apiKey).slice(0, 500) };
     }
     try {
       return { ok: true, json: JSON.parse(text) as unknown };
@@ -202,7 +203,7 @@ async function postJson(
       return { ok: false, timeout: true, status: null, detail: "The Grok attempt timed out" };
     }
     const message = error instanceof Error ? error.message : "Grok request failed";
-    return { ok: false, timeout: false, status: null, detail: redact(message).slice(0, 500) };
+    return { ok: false, timeout: false, status: null, detail: redact(message, apiKey).slice(0, 500) };
   }
 }
 
