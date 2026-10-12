@@ -1,0 +1,16 @@
+node_modules/
+.node_modules.lock
+dist/
+.output/
+.nitro/
+.vercel/
+.tanstack/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+screenshots/
+attachments/
+artifacts/
+*.zip

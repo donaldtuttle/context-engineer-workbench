@@ -1,0 +1,259 @@
+/* Copyright (c) 2026 Donald Tuttle. All rights reserved.
+   Proprietary. No license is granted to copy, modify, or distribute. */
+
+import { Download, Eraser, Upload } from "lucide-react";
+import { GROK_WINDOWS } from "@/lib/workbench/windows";
+import type { Conversation, DeliveryMode, Draft, ProviderId } from "@/lib/workbench/types";
+
+const field =
+  "min-h-11 w-full rounded-md border border-line bg-raised px-3 py-2 text-base text-fg placeholder:text-subtle";
+
+type Props = {
+  draft: Draft;
+  contextHash: string;
+  conversations: Conversation[];
+  activeId: string | null;
+  grokEnabled: boolean;
+  grokReason: string | null;
+  confirmDelete: boolean;
+  onDraft: (patch: Partial<Draft>) => void;
+  onClear: () => void;
+  onImport: (file: File) => void;
+  onExportContext: () => void;
+  onBaseline: () => void;
+  onOpen: (id: string) => void;
+  onDelete: () => void;
+  onExportSession: () => void;
+};
+
+export function InjectorPanel(props: Props) {
+  const { draft } = props;
+  const bytes = new TextEncoder().encode(draft.text).length;
+
+  return (
+    <div className="flex min-h-full flex-col gap-4 p-4">
+      <header className="grid gap-1">
+        <p className="text-xs text-muted">Panel 1</p>
+        <h2 className="text-lg font-medium">Injector</h2>
+        <p className="text-sm text-muted">
+          This is a draft. Send starts a new conversation only when the text, delivery, provider, or model differs.
+        </p>
+      </header>
+
+      <label className="grid gap-2">
+        <span className="text-sm text-muted">Name</span>
+        <input
+          className={field}
+          value={draft.name}
+          maxLength={80}
+          placeholder="Optional tag"
+          onChange={(event) => props.onDraft({ name: event.target.value })}
+        />
+      </label>
+
+      <label className="grid min-h-48 flex-1 gap-2">
+        <span className="text-sm text-muted">Context</span>
+        <textarea
+          className={`${field} min-h-48 flex-1 resize-y`}
+          value={draft.text}
+          placeholder="Paste subject or project context"
+          onChange={(event) => props.onDraft({ text: event.target.value })}
+        />
+      </label>
+
+      <div className="grid gap-1">
+        <span className="text-xs text-muted">Context SHA-256</span>
+        <p className="font-mono text-xs break-all text-fg">{props.contextHash || "…"}</p>
+        <p className="text-xs text-subtle">{bytes.toLocaleString()} UTF-8 bytes. Renaming does not reset history.</p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button type="button" className="inline-flex min-h-11 items-center gap-2 rounded-md border border-line px-3 text-sm" onClick={props.onClear}>
+          <Eraser className="size-4" aria-hidden="true" />
+          Clear
+        </button>
+        <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-line px-3 text-sm">
+          <Upload className="size-4" aria-hidden="true" />
+          Import
+          <input
+            className="sr-only"
+            type="file"
+            accept=".txt,.json,text/plain,application/json"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) props.onImport(file);
+              event.target.value = "";
+            }}
+          />
+        </label>
+        <button type="button" className="inline-flex min-h-11 items-center gap-2 rounded-md border border-line px-3 text-sm" onClick={props.onExportContext}>
+          <Download className="size-4" aria-hidden="true" />
+          Export
+        </button>
+      </div>
+
+      <fieldset className="grid gap-2">
+        <legend className="text-sm text-muted">Delivery</legend>
+        <div className="grid grid-cols-2 gap-2">
+          <ModeButton
+            current={draft.deliveryMode}
+            value="SYSTEM_SLOT"
+            label="System slot"
+            onDraft={props.onDraft}
+          />
+          <ModeButton
+            current={draft.deliveryMode}
+            value="USER_PASTE"
+            label="User paste"
+            onDraft={props.onDraft}
+          />
+        </div>
+      </fieldset>
+
+      <fieldset className="grid gap-2">
+        <legend className="text-sm text-muted">Provider</legend>
+        <div className="grid grid-cols-2 gap-2">
+          <ProviderButton current={draft.provider} value="mock" label="Mock" onDraft={props.onDraft} />
+          <ProviderButton current={draft.provider} value="grok" label="Grok" onDraft={props.onDraft} />
+        </div>
+        <p className="text-sm text-muted">
+          {props.grokEnabled ? "Grok adapter is available on the server." : props.grokReason}
+        </p>
+        <p className="text-sm text-muted">
+          Availability does not switch the selection. A failed Grok call stays a failure.
+        </p>
+      </fieldset>
+
+      <label className="grid gap-2">
+        <span className="text-sm text-muted">Grok model ID</span>
+        <input
+          className={field}
+          list="grok-model-ids"
+          value={draft.model}
+          onChange={(event) => props.onDraft({ model: event.target.value })}
+        />
+        <datalist id="grok-model-ids">
+          {Object.keys(GROK_WINDOWS).map((id) => (
+            <option key={id} value={id} />
+          ))}
+        </datalist>
+      </label>
+
+      <details className="rounded-lg border border-line p-3">
+        <summary className="cursor-pointer text-sm">Request settings</summary>
+        <div className="mt-3 grid gap-3">
+          <NumberField label="Timeout seconds" value={draft.timeoutSeconds} onChange={(timeoutSeconds) => props.onDraft({ timeoutSeconds })} />
+          <NumberField label="Max output tokens" value={draft.maxOutputTokens} onChange={(maxOutputTokens) => props.onDraft({ maxOutputTokens })} />
+          <OptionalNumber label="Temperature" value={draft.temperature} onChange={(temperature) => props.onDraft({ temperature })} />
+          <OptionalNumber label="Top-p" value={draft.topP} onChange={(topP) => props.onDraft({ topP })} />
+          <OptionalNumber label="Seed" value={draft.seed} integer onChange={(seed) => props.onDraft({ seed })} />
+          <p className="text-xs text-subtle">Blank temperature, top-p, and seed are omitted from the Grok request.</p>
+        </div>
+      </details>
+
+      <button type="button" className="min-h-11 rounded-md border border-line px-3 text-sm" onClick={props.onBaseline}>
+        Baseline
+      </button>
+      <p className="text-sm text-muted">Baseline opens a new conversation with empty context and no inherited messages.</p>
+
+      <div className="grid gap-2 border-t border-line pt-4">
+        <span className="text-sm text-muted">Saved conversations</span>
+        <select
+          className={field}
+          value={props.activeId ?? ""}
+          onChange={(event) => {
+            if (event.target.value) props.onOpen(event.target.value);
+          }}
+        >
+          <option value="">None selected</option>
+          {props.conversations.map((conversation) => (
+            <option key={conversation.id} value={conversation.id}>
+              {(conversation.contextName || "Untitled") + " · " + conversation.provider + " · " + conversation.turns.length}
+            </option>
+          ))}
+        </select>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="min-h-11 rounded-md border border-line px-3 text-sm text-bad" onClick={props.onDelete} disabled={!props.activeId}>
+            {props.confirmDelete ? "Confirm delete" : "Delete"}
+          </button>
+          <button type="button" className="min-h-11 rounded-md border border-line px-3 text-sm" onClick={props.onExportSession}>
+            Export session
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ModeButton(props: { current: DeliveryMode; value: DeliveryMode; label: string; onDraft: (patch: Partial<Draft>) => void }) {
+  const on = props.current === props.value;
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      className={`min-h-11 rounded-md px-3 text-sm ${on ? "bg-accent text-accent-fg" : "border border-line"}`}
+      onClick={() => props.onDraft({ deliveryMode: props.value })}
+    >
+      {props.label}
+    </button>
+  );
+}
+
+function ProviderButton(props: { current: ProviderId; value: ProviderId; label: string; onDraft: (patch: Partial<Draft>) => void }) {
+  const on = props.current === props.value;
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      className={`min-h-11 rounded-md px-3 text-sm ${on ? "bg-accent text-accent-fg" : "border border-line"}`}
+      onClick={() => props.onDraft({ provider: props.value })}
+    >
+      {props.label}
+    </button>
+  );
+}
+
+function NumberField(props: { label: string; value: number; onChange: (value: number) => void }) {
+  return (
+    <label className="grid gap-2">
+      <span className="text-sm text-muted">{props.label}</span>
+      <input
+        className={field}
+        inputMode="decimal"
+        value={String(props.value)}
+        onChange={(event) => {
+          const next = Number(event.target.value);
+          if (Number.isFinite(next)) props.onChange(next);
+        }}
+      />
+    </label>
+  );
+}
+
+function OptionalNumber(props: {
+  label: string;
+  value: number | null;
+  integer?: boolean;
+  onChange: (value: number | null) => void;
+}) {
+  return (
+    <label className="grid gap-2">
+      <span className="text-sm text-muted">{props.label}</span>
+      <input
+        className={field}
+        inputMode={props.integer ? "numeric" : "decimal"}
+        value={props.value ?? ""}
+        placeholder="Omit"
+        onChange={(event) => {
+          const raw = event.target.value.trim();
+          if (!raw) {
+            props.onChange(null);
+            return;
+          }
+          const next = Number(raw);
+          if (Number.isFinite(next)) props.onChange(props.integer ? Math.trunc(next) : next);
+        }}
+      />
+    </label>
+  );
+}
