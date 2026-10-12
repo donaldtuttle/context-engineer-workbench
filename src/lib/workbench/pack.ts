@@ -2,6 +2,7 @@
    Proprietary. No license is granted to copy, modify, or distribute.
    Storage packing is lossless. Exports stay in the readable record shape. */
 
+import { assertPersistedState } from "./session.ts";
 import type { Conversation, Draft, PersistedState, TurnRecord } from "./types.ts";
 
 export const PACK_MARK = "cew-pack-v1";
@@ -102,11 +103,18 @@ export function unpackState(envelope: PackedEnvelope): PersistedState {
           frozenContextText: at(strings, frozenContextText, "frozen context"),
           userPrompt: at(strings, userPrompt, "user prompt"),
           responseText: responseText === null ? null : at(strings, responseText, "response"),
-          assembledMessages: assembledMessages.map(([role, index]) => ({ role, content: at(strings, index, "message") })),
+          assembledMessages: assembledMessages.map((entry) => {
+            if (!Array.isArray(entry) || entry.length !== 2 || !["system", "user", "assistant"].includes(entry[0])) {
+              throw new Error("Packed message tuple is invalid");
+            }
+            return { role: entry[0], content: at(strings, entry[1], "message") };
+          }),
           error: error === null ? null : { type: error.type, message: at(strings, error.message, "error") },
         };
       }),
     };
   });
-  return { version: 1, draft: envelope.draft, conversations, activeId: envelope.activeId };
+  const state = { version: 1, draft: envelope.draft, conversations, activeId: envelope.activeId };
+  assertPersistedState(state);
+  return state;
 }
