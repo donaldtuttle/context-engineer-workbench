@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { sha256Text } from "./hash.ts";
 import { assembleMessages, promptSha256, replayableHistory, serializeMessages } from "./messages.ts";
 import { runMockExchange } from "./mock.ts";
-import { hashRecord, serializeRecord } from "./records.ts";
+import { hashRecord, serializeRecord, verifyRecordHash } from "./records.ts";
 import {
   activeConversation,
   beginSend,
@@ -556,6 +556,12 @@ describe("import", () => {
     assert.equal(budgetImport.kind, "error");
     if (budgetImport.kind === "error") assert.match(budgetImport.note, /budget/);
 
+    const counted = structuredClone(turn);
+    counted.preflight = { ...counted.preflight, countedInputTokens: -1 };
+    const countedImport = await interpretImport("turn.json", JSON.stringify(counted));
+    assert.equal(countedImport.kind, "error");
+    if (countedImport.kind === "error") assert.match(countedImport.note, /countedInputTokens/);
+
     const settings = structuredClone(turn);
     settings.settings = { ...settings.settings, temperature: 9 };
     const settingsImport = await interpretImport("turn.json", JSON.stringify(settings));
@@ -838,5 +844,48 @@ describe("grok adapter", () => {
     assert.equal(malformed.executionStatus, "error");
     assert.match(malformed.error?.message ?? "", /malformed/);
     assert.equal(malformed.responseText, null);
+  });
+
+  it("imports a blocked record whose remaining budget is negative without changing its hash", async () => {
+    const began = await beginSend(withDraft({ provider: "grok", model: "grok-4.5", maxOutputTokens: 32, text: "" }), "ping", clock());
+    assert.equal(began.ok, true);
+    if (!began.ok) return;
+    const turn = activeConversation(began.state)?.turns[0];
+    assert.ok(turn);
+    let calls = 0;
+    const result = await runGrokExchange(
+      {
+        model: turn.settings.model,
+        messages: turn.assembledMessages,
+        timeoutSeconds: turn.settings.timeoutSeconds,
+        maxOutputTokens: turn.settings.maxOutputTokens,
+        temperature: turn.settings.temperature,
+        topP: turn.settings.topP,
+        seed: turn.settings.seed,
+        contextText: turn.frozenContextText,
+        contextRole: "user",
+      },
+      { ...enabled, contextFloor: "16" },
+      async () => {
+        calls += 1;
+        throw new Error("network");
+      },
+    );
+    assert.equal(calls, 0);
+    assert.equal(result.executionStatus, "blocked");
+    assert.equal(result.contextBudget.budget, -16);
+    const finalized = await commitResult(began.state, began.conversationId, began.turnId, result, LATER);
+    const record = activeConversation(finalized)?.turns[0];
+    assert.ok(record?.recordSha256);
+    const exported = JSON.stringify(record);
+    const imported = await interpretImport(`turn-${record.id}.json`, exported);
+    assert.equal(imported.kind, "conversations");
+    if (imported.kind !== "conversations") return;
+    const importedTurn = imported.conversations[0]?.turns[0];
+    assert.equal(importedTurn?.contextBudget.budget, -16);
+    assert.equal(importedTurn?.recordSha256, record.recordSha256);
+    assert.equal(await verifyRecordHash(importedTurn ?? record), true);
+    assert.equal(await hashRecord(importedTurn ?? record), record.recordSha256);
+    assert.doesNotMatch(imported.note, /hash/);
   });
 });

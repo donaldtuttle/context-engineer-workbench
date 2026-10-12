@@ -559,7 +559,11 @@ function problemsForTurn(value: unknown, label: string): string[] {
     const budgetMissing = missingKeys(budget, BUDGET_FIELDS);
     if (budgetMissing.length > 0) problems.push(`${id} contextBudget is missing ${budgetMissing.join(", ")}`);
     else if (typeof budget.model !== "string" || budget.model.length === 0) problems.push(`${id} contextBudget model is invalid`);
-    else if (!nullableNonNegativeInt(budget.contextFloor) || !nullableNonNegativeInt(budget.modelContextWindow) || !nullableNonNegativeInt(budget.budget) || !nullableNonNegativeInt(budget.countedInputTokens)) {
+    else if (!nullableNonNegativeInt(budget.contextFloor) || !nullableNonNegativeInt(budget.modelContextWindow)) {
+      problems.push(`${id} contextBudget contextFloor is invalid`);
+    } else if (!nullableNonNegativeInt(budget.countedInputTokens)) {
+      problems.push(`${id} contextBudget countedInputTokens is invalid`);
+    } else if (!(budget.budget === null || (typeof budget.budget === "number" && Number.isInteger(budget.budget)))) {
       problems.push(`${id} contextBudget budget is invalid`);
     } else if (Object.hasOwn(budget, "injectionTokens") && !nullableNonNegativeInt(budget.injectionTokens)) {
       problems.push(`${id} contextBudget injectionTokens is invalid`);
