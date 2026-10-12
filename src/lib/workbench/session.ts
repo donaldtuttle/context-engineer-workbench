@@ -106,11 +106,14 @@ export async function beginSend(state: PersistedState, userPrompt: string, clock
   }
 
   const current = activeConversation(state);
-  const gate = current && sameBinding(current, draft) ? current.id : null;
-  if (gate && (hasPending(current) || sendGate.has(gate))) {
+  const reserve =
+    current && sameBinding(current, draft)
+      ? `conv:${current.id}`
+      : `new:${draft.provider}\u0000${draft.model}\u0000${draft.deliveryMode}\u0000${draft.text}`;
+  if ((current && sameBinding(current, draft) && hasPending(current)) || sendGate.has(reserve)) {
     return { ok: false, reason: "A send is already open on this conversation." };
   }
-  if (gate) sendGate.add(gate);
+  sendGate.add(reserve);
   try {
   const createdAt = clock.now();
   let conversation: Conversation;
@@ -214,7 +217,7 @@ export async function beginSend(state: PersistedState, userPrompt: string, clock
     },
   };
   } finally {
-    if (gate) sendGate.delete(gate);
+    sendGate.delete(reserve);
   }
 }
 
@@ -290,13 +293,15 @@ export async function commitResult(
   turnId: string,
   result: ExchangeResult,
   finalizedAt: string,
+  readLatest?: () => PersistedState,
 ): Promise<PersistedState> {
+  const latestNow = () => readLatest?.() ?? state;
   const conversation = state.conversations.find((item) => item.id === conversationId);
   const turn = conversation?.turns.find((item) => item.id === turnId);
-  if (!conversation || !turn || turn.executionStatus !== "pending") return state;
+  if (!conversation || !turn || turn.executionStatus !== "pending") return latestNow();
   const sealed = await finalizeTurn(turn, result, finalizedAt);
   const apply = sealChain.then((previous) => {
-    const base = overlayCompleted(state, previous);
+    const base = overlayCompleted(latestNow(), previous);
     return applySealedTurn(base, conversationId, turnId, sealed);
   });
   sealChain = apply.then(
@@ -456,7 +461,7 @@ const BUDGET_FIELDS = [
   "blockedReason",
 ] as const;
 
-const EXECUTION = new Set(["pending", "success", "error", "timeout", "blocked"]);
+const EXECUTION = new Set(["pending", "success", "error", "timeout", "blocked", "incomplete"]);
 
 function nullableString(value: unknown): boolean {
   return value === null || typeof value === "string";
@@ -464,6 +469,14 @@ function nullableString(value: unknown): boolean {
 
 function nullableNumber(value: unknown): boolean {
   return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function nonNegativeInt(value: unknown): boolean {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function nullableNonNegativeInt(value: unknown): boolean {
+  return value === null || nonNegativeInt(value);
 }
 
 function missingKeys(record: Record<string, unknown>, keys: readonly string[]): string[] {
@@ -501,12 +514,18 @@ function problemsForTurn(value: unknown, label: string): string[] {
   else {
     const settingsMissing = missingKeys(settings, ["provider", "model", "deliveryMode", "timeoutSeconds", "maxOutputTokens", "temperature", "topP", "seed"]);
     if (settingsMissing.length > 0) problems.push(`${id} settings are missing ${settingsMissing.join(", ")}`);
-    else if (!isProvider(settings.provider) || !isDelivery(settings.deliveryMode) || typeof settings.model !== "string") {
+    else if (!isProvider(settings.provider) || !isDelivery(settings.deliveryMode) || typeof settings.model !== "string" || settings.model.length === 0) {
       problems.push(`${id} settings are invalid`);
-    } else if (typeof settings.timeoutSeconds !== "number" || typeof settings.maxOutputTokens !== "number") {
-      problems.push(`${id} settings are invalid`);
-    } else if (!nullableNumber(settings.temperature) || !nullableNumber(settings.topP) || !nullableNumber(settings.seed)) {
-      problems.push(`${id} settings are invalid`);
+    } else if (typeof settings.timeoutSeconds !== "number" || !Number.isFinite(settings.timeoutSeconds) || settings.timeoutSeconds < 0.05 || settings.timeoutSeconds > 300) {
+      problems.push(`${id} settings timeoutSeconds is invalid`);
+    } else if (!nonNegativeInt(settings.maxOutputTokens) || settings.maxOutputTokens < 16 || settings.maxOutputTokens > 8192) {
+      problems.push(`${id} settings maxOutputTokens is invalid`);
+    } else if (!nullableNumber(settings.temperature) || (typeof settings.temperature === "number" && (settings.temperature < 0 || settings.temperature > 2))) {
+      problems.push(`${id} settings temperature is invalid`);
+    } else if (!nullableNumber(settings.topP) || (typeof settings.topP === "number" && (settings.topP < 0 || settings.topP > 1))) {
+      problems.push(`${id} settings topP is invalid`);
+    } else if (settings.seed !== null && !Number.isInteger(settings.seed)) {
+      problems.push(`${id} settings seed is invalid`);
     }
   }
   if (!Array.isArray(record.assembledMessages)) problems.push(`${id} assembledMessages is invalid`);
@@ -526,14 +545,37 @@ function problemsForTurn(value: unknown, label: string): string[] {
   else {
     const preflightMissing = missingKeys(preflight, PREFLIGHT_FIELDS);
     if (preflightMissing.length > 0) problems.push(`${id} preflight is missing ${preflightMissing.join(", ")}`);
+    else if (!nonNegativeInt(preflight.contextChars) || !nonNegativeInt(preflight.contextUtf8Bytes) || !nonNegativeInt(preflight.messageCount) || !nonNegativeInt(preflight.promptUtf8Bytes)) {
+      problems.push(`${id} preflight contextUtf8Bytes is invalid`);
+    } else if (!nullableNonNegativeInt(preflight.countedInputTokens)) {
+      problems.push(`${id} preflight countedInputTokens is invalid`);
+    } else if (typeof preflight.measurementScope !== "string" || typeof preflight.countSource !== "string") {
+      problems.push(`${id} preflight countSource is invalid`);
+    }
   }
   const budget = asRecord(record.contextBudget);
   if (!budget) problems.push(`${id} contextBudget is missing`);
   else {
     const budgetMissing = missingKeys(budget, BUDGET_FIELDS);
     if (budgetMissing.length > 0) problems.push(`${id} contextBudget is missing ${budgetMissing.join(", ")}`);
+    else if (typeof budget.model !== "string" || budget.model.length === 0) problems.push(`${id} contextBudget model is invalid`);
+    else if (!nullableNonNegativeInt(budget.contextFloor) || !nullableNonNegativeInt(budget.modelContextWindow) || !nullableNonNegativeInt(budget.budget) || !nullableNonNegativeInt(budget.countedInputTokens)) {
+      problems.push(`${id} contextBudget budget is invalid`);
+    } else if (Object.hasOwn(budget, "injectionTokens") && !nullableNonNegativeInt(budget.injectionTokens)) {
+      problems.push(`${id} contextBudget injectionTokens is invalid`);
+    } else if (typeof budget.contextFloorSource !== "string" || typeof budget.countSource !== "string" || !nullableString(budget.blockedReason)) {
+      problems.push(`${id} contextBudget countSource is invalid`);
+    }
   }
-  if (record.providerUsage !== null && asRecord(record.providerUsage) === null) problems.push(`${id} providerUsage is invalid`);
+  if (record.providerUsage !== null) {
+    const usage = asRecord(record.providerUsage);
+    if (!usage) problems.push(`${id} providerUsage is invalid`);
+    else {
+      for (const key of ["input_tokens", "output_tokens", "total_tokens", "reasoning_tokens"]) {
+        if (Object.hasOwn(usage, key) && !nonNegativeInt(usage[key])) problems.push(`${id} providerUsage ${key} is invalid`);
+      }
+    }
+  }
   const transport = asRecord(record.transport);
   if (!transport) problems.push(`${id} transport is missing`);
   else if (transport.kind === "OFFLINE_FIXTURE") {

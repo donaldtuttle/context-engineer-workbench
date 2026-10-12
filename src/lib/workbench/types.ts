@@ -14,7 +14,7 @@ export const MEASUREMENT_SCOPE =
 
 export type DeliveryMode = "SYSTEM_SLOT" | "USER_PASTE";
 export type ProviderId = "mock" | "grok";
-export type ExecutionStatus = "pending" | "success" | "error" | "timeout" | "blocked";
+export type ExecutionStatus = "pending" | "success" | "error" | "timeout" | "blocked" | "incomplete";
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant";

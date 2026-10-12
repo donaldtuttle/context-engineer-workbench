@@ -350,6 +350,56 @@ describe("snapshots and hashes", () => {
     assert.equal(opened.length, 1);
   });
 
+  it("reserves the first send before any await when no conversation exists", async () => {
+    const state = withDraft({ text: "PROJECT" });
+    const [first, second] = await Promise.all([beginSend(state, "one", clock()), beginSend(state, "two", clock())]);
+    assert.equal([first, second].filter((item) => item.ok).length, 1);
+  });
+
+  it("reserves a send that would open a new conversation from a changed draft", async () => {
+    const state = await succeed(withDraft({ text: "PROJECT" }), "kept");
+    const changed = { ...state, draft: { ...state.draft, text: "OTHER" } };
+    const [first, second] = await Promise.all([beginSend(changed, "one", clock()), beginSend(changed, "two", clock())]);
+    assert.equal([first, second].filter((item) => item.ok).length, 1);
+  });
+
+  it("does not restore a conversation deleted while its turn is finalized", async () => {
+    const began = await beginSend(withDraft({ text: "PROJECT" }), "one", clock());
+    assert.equal(began.ok, true);
+    if (!began.ok) return;
+    let latest = began.state;
+    const receipt = runMockExchange({
+      messages: [],
+      contextText: "PROJECT",
+      promptSha256: "unused",
+      seed: null,
+      blockedReason: null,
+    });
+    const finishing = commitResult(began.state, began.conversationId, began.turnId, receipt, LATER, () => latest);
+    latest = deleteConversation(latest, began.conversationId);
+    const finished = await finishing;
+    assert.equal(finished.conversations.some((item) => item.id === began.conversationId), false);
+  });
+
+  it("keeps a draft edit made while a turn is finalized", async () => {
+    const began = await beginSend(withDraft({ text: "PROJECT" }), "one", clock());
+    assert.equal(began.ok, true);
+    if (!began.ok) return;
+    let latest = began.state;
+    const receipt = runMockExchange({
+      messages: [],
+      contextText: "PROJECT",
+      promptSha256: "unused",
+      seed: null,
+      blockedReason: null,
+    });
+    const finishing = commitResult(began.state, began.conversationId, began.turnId, receipt, LATER, () => latest);
+    latest = { ...latest, draft: { ...latest.draft, name: "during" } };
+    const finished = await finishing;
+    assert.equal(finished.draft.name, "during");
+    assert.equal(activeConversation(finished)?.turns[0]?.executionStatus, "success");
+  });
+
   it("keeps both finalizations when two turns are sealed together", async () => {
     const began = await beginSend(withDraft({ text: "PROJECT" }), "one", clock());
     assert.equal(began.ok, true);
@@ -485,6 +535,32 @@ describe("import", () => {
     const filled = parsePersisted(JSON.stringify({ version: 1, draft: absent, conversations: [], activeId: null }));
     assert.equal(filled.draft.temperature, 1);
     assert.equal(filled.draft.topP, 1);
+  });
+
+  it("rejects null byte counts and invalid nested usage, budget, or settings", async () => {
+    const bytes = structuredClone(turn);
+    bytes.preflight = { ...bytes.preflight, contextUtf8Bytes: null };
+    const byteImport = await interpretImport("turn.json", JSON.stringify(bytes));
+    assert.equal(byteImport.kind, "error");
+    if (byteImport.kind === "error") assert.match(byteImport.note, /contextUtf8Bytes/);
+
+    const usage = structuredClone(turn);
+    usage.providerUsage = { input_tokens: null };
+    const usageImport = await interpretImport("turn.json", JSON.stringify(usage));
+    assert.equal(usageImport.kind, "error");
+    if (usageImport.kind === "error") assert.match(usageImport.note, /input_tokens|providerUsage/);
+
+    const budget = structuredClone(turn);
+    budget.contextBudget = { ...budget.contextBudget, budget: "wide" };
+    const budgetImport = await interpretImport("turn.json", JSON.stringify(budget));
+    assert.equal(budgetImport.kind, "error");
+    if (budgetImport.kind === "error") assert.match(budgetImport.note, /budget/);
+
+    const settings = structuredClone(turn);
+    settings.settings = { ...settings.settings, temperature: 9 };
+    const settingsImport = await interpretImport("turn.json", JSON.stringify(settings));
+    assert.equal(settingsImport.kind, "error");
+    if (settingsImport.kind === "error") assert.match(settingsImport.note, /temperature|settings/);
   });
 });
 
@@ -726,5 +802,41 @@ describe("grok adapter", () => {
     assert.equal(result.executionStatus, "error");
     assert.match(result.error?.message ?? "", /500/);
     assert.equal((result.error?.message ?? "").includes("xai-super-secret-key"), false);
+  });
+
+  it("marks an output-limit reply incomplete and a malformed HTTP 200 as an error", async () => {
+    const input = {
+      model: "grok-4.5",
+      messages: [{ role: "user" as const, content: "ping" }],
+      timeoutSeconds: 30,
+      maxOutputTokens: 32,
+      temperature: null,
+      topP: null,
+      seed: null,
+    };
+    const limited = await runGrokExchange(
+      input,
+      enabled,
+      fetchSpy((_url, _body, nth) => {
+        if (nth === 1) return { token_ids: [{ token_id: 1 }] };
+        return { id: "resp-cut", model: "grok-4.5", choices: [{ finish_reason: "length", message: { content: "cut off" } }] };
+      }).fetchImpl,
+    );
+    assert.notEqual(limited.executionStatus, "success");
+    assert.equal(limited.executionStatus, "incomplete");
+    assert.equal(limited.responseStatus, "length");
+    assert.equal(limited.responseText, "cut off");
+
+    const malformed = await runGrokExchange(
+      input,
+      enabled,
+      fetchSpy((_url, _body, nth) => {
+        if (nth === 1) return { token_ids: [{ token_id: 1 }] };
+        return { id: "resp-bad", model: "grok-4.5", choices: [{ finish_reason: "stop", message: { content: 12 } }] };
+      }).fetchImpl,
+    );
+    assert.equal(malformed.executionStatus, "error");
+    assert.match(malformed.error?.message ?? "", /malformed/);
+    assert.equal(malformed.responseText, null);
   });
 });

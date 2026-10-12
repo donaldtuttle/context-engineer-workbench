@@ -204,19 +204,25 @@ async function postJson(
   }
 }
 
-function readTextContent(content: unknown): { text: string; encryptedOmitted: boolean } {
-  if (typeof content === "string") return { text: content, encryptedOmitted: false };
-  if (!Array.isArray(content)) return { text: "", encryptedOmitted: false };
+function readTextContent(content: unknown): { text: string; encryptedOmitted: boolean; readable: boolean } {
+  if (typeof content === "string") return { text: content, encryptedOmitted: false, readable: true };
+  if (!Array.isArray(content)) return { text: "", encryptedOmitted: false, readable: false };
   const parts: string[] = [];
   let encryptedOmitted = false;
+  let readable = false;
   for (const part of content) {
     const record = asRecord(part);
-    if (!record) continue;
+    if (!record || Array.isArray(part)) continue;
     if (typeof record.encrypted_content === "string" && record.encrypted_content) encryptedOmitted = true;
-    if (typeof record.text === "string") parts.push(record.text);
-    else if (typeof record.content === "string") parts.push(record.content);
+    if (typeof record.text === "string") {
+      parts.push(record.text);
+      readable = true;
+    } else if (typeof record.content === "string") {
+      parts.push(record.content);
+      readable = true;
+    }
   }
-  return { text: parts.join(""), encryptedOmitted };
+  return { text: parts.join(""), encryptedOmitted, readable };
 }
 
 export async function runGrokExchange(
@@ -400,21 +406,34 @@ export async function runGrokExchange(
     (typeof message?.encrypted_content === "string" && message.encrypted_content.length > 0) ||
     (typeof body?.encrypted_content === "string" && (body.encrypted_content as string).length > 0);
   const finish = choice?.finish_reason;
-  const responseStatus = finish === "stop" || finish === "REASON_STOP" ? "completed" : typeof finish === "string" && finish ? finish : "unknown";
   const returned = typeof body?.model === "string" ? body.model : null;
   const responseId = typeof body?.id === "string" ? body.id : null;
-
-  return {
-    executionStatus: "success",
-    responseText: content.text,
-    responseStatus,
-    error: null,
+  const receipt = {
     returnedModel: returned,
     providerResponseId: responseId,
     providerUsage: usage,
     reasoningEncryptedOmitted: Boolean(encrypted),
-    countedInputTokens: counted,
-    countSource: gate.countSource,
-    contextBudget: gate,
   };
+  if (finish === "length" || finish === "LENGTH" || finish === "max_tokens") {
+    return failure(
+      "incomplete",
+      "Incomplete",
+      "The reply was cut off at the max output cap. It is not conversation history.",
+      gate,
+      { ...receipt, responseText: content.readable ? content.text : null, responseStatus: "length" },
+    );
+  }
+  if ((finish === "stop" || finish === "REASON_STOP") && content.readable && message && !Array.isArray(choice?.message)) {
+    return {
+      executionStatus: "success",
+      responseText: content.text,
+      responseStatus: "completed",
+      error: null,
+      countedInputTokens: counted,
+      countSource: gate.countSource,
+      contextBudget: gate,
+      ...receipt,
+    };
+  }
+  return failure("error", "ProviderError", "Grok returned a malformed response", gate, receipt);
 }

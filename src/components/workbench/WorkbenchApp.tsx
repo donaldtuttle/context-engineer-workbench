@@ -213,7 +213,14 @@ export function WorkbenchApp() {
       result = blockedLocally(message, turn.requestedModel);
       result = { ...result, executionStatus: "error", error: { type: "ClientError", message } };
     }
-    const next = await commitResult(stateRef.current, began.conversationId, began.turnId, result, new Date().toISOString());
+    const next = await commitResult(
+      stateRef.current,
+      began.conversationId,
+      began.turnId,
+      result,
+      new Date().toISOString(),
+      () => stateRef.current,
+    );
     commit(next);
   }
 
