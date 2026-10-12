@@ -1,6 +1,44 @@
 # Context Engineer Workbench v1
 
-A three-panel instrument for one subject context, one conversation, and a frozen record of each turn.
+**Give AI the background for your project, talk it through, and keep a clear record of each exchange.**
+
+[Open the live app](https://context-engineer-workbench.grok.me) · [User guide and quick start](docs/USER_GUIDE.md)
+
+## What is it?
+
+Context Engineer Workbench is a browser app for conversations that depend on information you supply. Paste project notes, a recipe, a writing brief, or a research procedure into the **Injector**, then ask questions in **Dialog**. The app includes that material with each request so you can keep asking follow-up questions without pasting it again.
+
+The **Diagnostics** panel lets you inspect the background, messages, settings, and outcome recorded for each turn. It shows available token counts—the small pieces of text an AI processes—and fingerprints called hashes that identify the saved content.
+
+This is **context engineering** in a practical form: choosing and organizing the information an AI receives to help it work on a particular task.
+
+## Why it matters
+
+An AI does not automatically know your project’s terminology, constraints, or latest decisions. Supplying that background gives it information to work from. Keeping a record lets you check what you actually supplied when you review an answer later.
+
+Use the workbench to:
+
+- Ask questions about your own notes, specifications, or instructions.
+- Reuse the same background throughout a conversation.
+- Try a fresh conversation without the background using **Baseline**.
+- Inspect how much input was counted and what usage the provider reported.
+- Export the context or conversation for later review.
+
+The app preserves the submitted material and records the exchange. It does not guarantee that the AI will follow every instruction or get every detail right. Hashes identify content; they do not establish that an answer is correct.
+
+## Quick start
+
+1. [Open the app](https://context-engineer-workbench.grok.me). On a phone, use the **Injector**, **Dialog**, and **Diagnostics** tabs.
+2. In **Injector**, paste your background into **Context** and optionally give it a name.
+3. Leave **System slot** selected. Choose **Grok** for an AI response when the server reports it is available, or **Mock** to try the record workflow without a model call.
+4. In **Dialog**, type a question and press **Send**.
+5. Open **Diagnostics** to inspect that turn, then use **Export turn** or **Export session** to save a copy.
+
+Mock returns a structured receipt, not an AI answer. See the [user guide](docs/USER_GUIDE.md) for a pasteable example, baseline comparisons, import/export, and troubleshooting.
+
+## Current version
+
+This repository contains the browser prototype, with Grok and Mock providers. Conversations are saved in this browser’s local storage. A Grok request travels through the app’s server to xAI; local conversation storage does not make the hosted app an entirely local system.
 
 The draft is not a session. Send freezes the request. The record hash stays Pending until the outcome is final. After that, edits do not rewrite it.
 
