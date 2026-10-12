@@ -407,7 +407,7 @@ export function WorkbenchApp() {
           </button>
         ))}
       </nav>
-      <div className="grid min-h-0 flex-1 lg:grid-cols-3">
+      <div inert={!hydrated} className="grid min-h-0 flex-1 lg:grid-cols-3">
         <section className={panelClass("injector", true)} aria-label="Injector">
           <InjectorPanel
             draft={state.draft}
