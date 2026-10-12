@@ -5,8 +5,8 @@
 
 import { canonicalJson } from "./hash.ts";
 import { packState, unpackState, PACK_MARK, type PackedEnvelope } from "./pack.ts";
-import { parsePersisted } from "./session.ts";
-import { emptyState, type PersistedState } from "./types.ts";
+import { assertPersistedState } from "./session.ts";
+import { type PersistedState } from "./types.ts";
 
 export const STORAGE_KEY_V1 = "cew.sessions.v1";
 export const STORAGE_KEY_V2 = "cew.sessions.v2";
@@ -30,10 +30,8 @@ function isEnvelope(value: unknown): value is PackedEnvelope {
 
 function legacyState(raw: string): PersistedState | null {
   try {
-    const parsed = JSON.parse(raw) as { version?: unknown; draft?: unknown; conversations?: unknown };
-    if (parsed.version !== 1 || !parsed.draft || !Array.isArray(parsed.conversations)) return null;
-    const state = parsePersisted(raw);
-    if (state.conversations.length !== parsed.conversations.length) return null;
+    const state: unknown = JSON.parse(raw);
+    assertPersistedState(state);
     return state;
   } catch {
     return null;
@@ -45,12 +43,11 @@ export function loadStored(storage: StorageLike): StorageLoad {
   let legacy: string | null;
   try {
     packed = storage.getItem(STORAGE_KEY_V2);
-    legacy = storage.getItem(STORAGE_KEY_V1);
+    legacy = packed === null ? storage.getItem(STORAGE_KEY_V1) : null;
   } catch {
     return { status: "unavailable", message: "This browser refused to read saved conversations." };
   }
   if (packed !== null) {
-    if (packed.trim() === "") return { status: "ready", state: emptyState() };
     try {
       const parsed = JSON.parse(packed) as unknown;
       if (!isEnvelope(parsed)) return { status: "corrupt", key: STORAGE_KEY_V2, raw: packed, message: "Saved data uses an unsupported format." };
@@ -68,8 +65,9 @@ export function loadStored(storage: StorageLike): StorageLoad {
 
 export function saveStored(storage: StorageLike, state: PersistedState): { ok: true } | { ok: false; message: string } {
   if (!storage.setItem || !storage.getItem) return { ok: false, message: "This browser cannot store conversations." };
-  const payload = JSON.stringify(packState(state));
   try {
+    assertPersistedState(state);
+    const payload = JSON.stringify(packState(state));
     storage.setItem(STORAGE_KEY_V2, payload);
     const written = storage.getItem(STORAGE_KEY_V2);
     if (written !== payload) return { ok: false, message: "The save could not be verified." };
