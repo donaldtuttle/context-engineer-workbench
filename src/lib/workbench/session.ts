@@ -1,16 +1,14 @@
 /* Copyright (c) 2026 Donald Tuttle. All rights reserved.
    Proprietary. No license is granted to copy, modify, or distribute. */
 
-import { sha256Text, utf8ByteLength } from "./hash.ts";
-import { assembleMessages, promptByteLength, promptSha256, replayableHistory } from "./messages.ts";
+import { canonicalJson, sha256Text, utf8ByteLength } from "./hash.ts";
+import { assembleMessages, promptByteLength, promptSha256, replayableHistory, turnHashesMatch } from "./messages.ts";
 import { finalizeTurn } from "./records.ts";
 import {
   LOCAL_BYTE_CEILING,
   MEASUREMENT_SCOPE,
   MOCK_MODEL,
   SCHEMA_VERSION,
-  DEFAULT_TEMPERATURE,
-  DEFAULT_TOP_P,
   emptyState,
   type Clock,
   type Conversation,
@@ -74,6 +72,8 @@ export type BeginResult =
   | { ok: true; state: PersistedState; conversationId: string; turnId: string }
   | { ok: false; reason: string };
 
+const sendGate = new Set<string>();
+
 export async function beginSend(state: PersistedState, userPrompt: string, clock: Clock = systemClock()): Promise<BeginResult> {
   const prompt = userPrompt.trim();
   if (!prompt) return { ok: false, reason: "Enter a prompt." };
@@ -106,10 +106,12 @@ export async function beginSend(state: PersistedState, userPrompt: string, clock
   }
 
   const current = activeConversation(state);
-  if (current && sameBinding(current, draft) && hasPending(current)) {
+  const gate = current && sameBinding(current, draft) ? current.id : null;
+  if (gate && (hasPending(current) || sendGate.has(gate))) {
     return { ok: false, reason: "A send is already open on this conversation." };
   }
-
+  if (gate) sendGate.add(gate);
+  try {
   const createdAt = clock.now();
   let conversation: Conversation;
   let conversations: Conversation[];
@@ -132,7 +134,7 @@ export async function beginSend(state: PersistedState, userPrompt: string, clock
     conversations = [...state.conversations, conversation];
   }
 
-  const history = replayableHistory(conversation.turns, conversation.provider);
+  const history = await replayableHistory(conversation.turns, conversation.provider);
   const assembledMessages = assembleMessages({
     contextText: conversation.contextText,
     deliveryMode: conversation.deliveryMode,
@@ -211,6 +213,9 @@ export async function beginSend(state: PersistedState, userPrompt: string, clock
       activeId: withTurn.id,
     },
   };
+  } finally {
+    if (gate) sendGate.delete(gate);
+  }
 }
 
 export function localBlockReason(turn: TurnRecord): string | null {
@@ -245,6 +250,40 @@ export function blockedLocally(reason: string, model: string): ExchangeResult {
   };
 }
 
+export function applySealedTurn(
+  state: PersistedState,
+  conversationId: string,
+  turnId: string,
+  sealed: TurnRecord,
+): PersistedState {
+  const conversation = state.conversations.find((item) => item.id === conversationId);
+  if (!conversation) return state;
+  const turn = conversation.turns.find((item) => item.id === turnId);
+  if (!turn || turn.executionStatus !== "pending") return state;
+  const nextConversation: Conversation = {
+    ...conversation,
+    turns: conversation.turns.map((item) => (item.id === turnId ? sealed : item)),
+  };
+  return {
+    ...state,
+    conversations: state.conversations.map((item) => (item.id === conversationId ? nextConversation : item)),
+  };
+}
+
+function overlayCompleted(base: PersistedState, previous: PersistedState | null): PersistedState {
+  if (!previous) return base;
+  let next = base;
+  for (const conversation of previous.conversations) {
+    for (const turn of conversation.turns) {
+      if (turn.executionStatus === "pending") continue;
+      next = applySealedTurn(next, conversation.id, turn.id, turn);
+    }
+  }
+  return next;
+}
+
+let sealChain: Promise<PersistedState | null> = Promise.resolve(null);
+
 export async function commitResult(
   state: PersistedState,
   conversationId: string,
@@ -253,18 +292,18 @@ export async function commitResult(
   finalizedAt: string,
 ): Promise<PersistedState> {
   const conversation = state.conversations.find((item) => item.id === conversationId);
-  if (!conversation) return state;
-  const turn = conversation.turns.find((item) => item.id === turnId);
-  if (!turn || turn.executionStatus !== "pending") return state;
-  const finalized = await finalizeTurn(turn, result, finalizedAt);
-  const nextConversation: Conversation = {
-    ...conversation,
-    turns: conversation.turns.map((item) => (item.id === turnId ? finalized : item)),
-  };
-  return {
-    ...state,
-    conversations: state.conversations.map((item) => (item.id === conversationId ? nextConversation : item)),
-  };
+  const turn = conversation?.turns.find((item) => item.id === turnId);
+  if (!conversation || !turn || turn.executionStatus !== "pending") return state;
+  const sealed = await finalizeTurn(turn, result, finalizedAt);
+  const apply = sealChain.then((previous) => {
+    const base = overlayCompleted(state, previous);
+    return applySealedTurn(base, conversationId, turnId, sealed);
+  });
+  sealChain = apply.then(
+    (next) => next,
+    () => null,
+  );
+  return apply;
 }
 
 export async function startBaseline(state: PersistedState, clock: Clock = systemClock()): Promise<PersistedState> {
@@ -343,8 +382,6 @@ export function parsePersisted(raw: string | null): PersistedState {
       draft: {
         ...emptyState().draft,
         ...parsed.draft,
-        temperature: parsed.draft.temperature ?? DEFAULT_TEMPERATURE,
-        topP: parsed.draft.topP ?? DEFAULT_TOP_P,
       },
       conversations: parsed.conversations,
       activeId: typeof parsed.activeId === "string" ? parsed.activeId : null,
@@ -371,40 +408,161 @@ function isDelivery(value: unknown): value is DeliveryMode {
   return value === "SYSTEM_SLOT" || value === "USER_PASTE";
 }
 
-function isTurn(value: unknown): value is TurnRecord {
-  const record = asRecord(value);
-  if (!record || record.schemaVersion !== SCHEMA_VERSION) return false;
-  const settings = asRecord(record.settings);
-  if (!settings || !isProvider(settings.provider) || !isDelivery(settings.deliveryMode) || typeof settings.model !== "string") {
-    return false;
-  }
-  return (
-    typeof record.id === "string" &&
-    typeof record.userPrompt === "string" &&
-    typeof record.frozenContextText === "string" &&
-    typeof record.contextName === "string" &&
-    typeof record.contextSha256 === "string" &&
-    typeof record.createdAt === "string" &&
-    typeof record.executionStatus === "string" &&
-    asRecord(record.preflight) !== null &&
-    asRecord(record.contextBudget) !== null
-  );
+const TURN_FIELDS = [
+  "id",
+  "schemaVersion",
+  "createdAt",
+  "finalizedAt",
+  "executionStatus",
+  "requestedModel",
+  "returnedModel",
+  "responseStatus",
+  "settings",
+  "contextName",
+  "frozenContextText",
+  "contextSha256",
+  "promptSha256",
+  "recordSha256",
+  "assembledMessages",
+  "userPrompt",
+  "responseText",
+  "error",
+  "preflight",
+  "providerUsage",
+  "providerResponseId",
+  "reasoningEncryptedOmitted",
+  "contextBudget",
+  "transport",
+] as const;
+
+const PREFLIGHT_FIELDS = [
+  "contextChars",
+  "contextUtf8Bytes",
+  "messageCount",
+  "promptUtf8Bytes",
+  "countedInputTokens",
+  "measurementScope",
+  "countSource",
+] as const;
+
+const BUDGET_FIELDS = [
+  "model",
+  "contextFloor",
+  "modelContextWindow",
+  "contextFloorSource",
+  "budget",
+  "countedInputTokens",
+  "countSource",
+  "blockedReason",
+] as const;
+
+const EXECUTION = new Set(["pending", "success", "error", "timeout", "blocked"]);
+
+function nullableString(value: unknown): boolean {
+  return value === null || typeof value === "string";
 }
 
-function isConversation(value: unknown): value is Conversation {
+function nullableNumber(value: unknown): boolean {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
+function missingKeys(record: Record<string, unknown>, keys: readonly string[]): string[] {
+  return keys.filter((key) => !Object.hasOwn(record, key));
+}
+
+function problemsForTurn(value: unknown, label: string): string[] {
   const record = asRecord(value);
-  if (!record || !isDelivery(record.deliveryMode) || !isProvider(record.provider) || typeof record.model !== "string") {
-    return false;
+  if (!record) return [`${label} is missing a turn object`];
+  const id = typeof record.id === "string" && record.id ? record.id : label;
+  const missing = missingKeys(record, TURN_FIELDS);
+  if (missing.length > 0) return [`${id} is missing ${missing.join(", ")}`];
+  const problems: string[] = [];
+  if (record.schemaVersion !== SCHEMA_VERSION) problems.push(`${id} has the wrong schema`);
+  if (typeof record.id !== "string" || record.id.length === 0) problems.push(`${id} id is invalid`);
+  if (typeof record.createdAt !== "string") problems.push(`${id} createdAt is invalid`);
+  if (!nullableString(record.finalizedAt)) problems.push(`${id} finalizedAt is invalid`);
+  if (typeof record.executionStatus !== "string" || !EXECUTION.has(record.executionStatus)) {
+    problems.push(`${id} executionStatus is invalid`);
   }
-  return (
-    typeof record.id === "string" &&
-    typeof record.createdAt === "string" &&
-    typeof record.contextName === "string" &&
-    typeof record.contextText === "string" &&
-    typeof record.contextSha256 === "string" &&
-    Array.isArray(record.turns) &&
-    record.turns.every(isTurn)
-  );
+  if (typeof record.requestedModel !== "string") problems.push(`${id} requestedModel is invalid`);
+  if (!nullableString(record.returnedModel)) problems.push(`${id} returnedModel is invalid`);
+  if (!nullableString(record.responseStatus)) problems.push(`${id} responseStatus is invalid`);
+  if (typeof record.contextName !== "string") problems.push(`${id} contextName is invalid`);
+  if (typeof record.frozenContextText !== "string") problems.push(`${id} frozenContextText is invalid`);
+  if (typeof record.contextSha256 !== "string") problems.push(`${id} contextSha256 is invalid`);
+  if (typeof record.promptSha256 !== "string") problems.push(`${id} promptSha256 is invalid`);
+  if (!nullableString(record.recordSha256)) problems.push(`${id} recordSha256 is invalid`);
+  if (typeof record.userPrompt !== "string") problems.push(`${id} userPrompt is invalid`);
+  if (!nullableString(record.responseText)) problems.push(`${id} responseText is invalid`);
+  if (typeof record.reasoningEncryptedOmitted !== "boolean") problems.push(`${id} reasoningEncryptedOmitted is invalid`);
+  if (!nullableString(record.providerResponseId)) problems.push(`${id} providerResponseId is invalid`);
+  const settings = asRecord(record.settings);
+  if (!settings) problems.push(`${id} settings are missing`);
+  else {
+    const settingsMissing = missingKeys(settings, ["provider", "model", "deliveryMode", "timeoutSeconds", "maxOutputTokens", "temperature", "topP", "seed"]);
+    if (settingsMissing.length > 0) problems.push(`${id} settings are missing ${settingsMissing.join(", ")}`);
+    else if (!isProvider(settings.provider) || !isDelivery(settings.deliveryMode) || typeof settings.model !== "string") {
+      problems.push(`${id} settings are invalid`);
+    } else if (typeof settings.timeoutSeconds !== "number" || typeof settings.maxOutputTokens !== "number") {
+      problems.push(`${id} settings are invalid`);
+    } else if (!nullableNumber(settings.temperature) || !nullableNumber(settings.topP) || !nullableNumber(settings.seed)) {
+      problems.push(`${id} settings are invalid`);
+    }
+  }
+  if (!Array.isArray(record.assembledMessages)) problems.push(`${id} assembledMessages is invalid`);
+  else {
+    const messagesOk = record.assembledMessages.every((item) => {
+      const message = asRecord(item);
+      return message !== null && (message.role === "system" || message.role === "user" || message.role === "assistant") && typeof message.content === "string";
+    });
+    if (!messagesOk) problems.push(`${id} assembledMessages is invalid`);
+  }
+  if (record.error !== null) {
+    const error = asRecord(record.error);
+    if (!error || typeof error.type !== "string" || typeof error.message !== "string") problems.push(`${id} error is invalid`);
+  }
+  const preflight = asRecord(record.preflight);
+  if (!preflight) problems.push(`${id} preflight is missing`);
+  else {
+    const preflightMissing = missingKeys(preflight, PREFLIGHT_FIELDS);
+    if (preflightMissing.length > 0) problems.push(`${id} preflight is missing ${preflightMissing.join(", ")}`);
+  }
+  const budget = asRecord(record.contextBudget);
+  if (!budget) problems.push(`${id} contextBudget is missing`);
+  else {
+    const budgetMissing = missingKeys(budget, BUDGET_FIELDS);
+    if (budgetMissing.length > 0) problems.push(`${id} contextBudget is missing ${budgetMissing.join(", ")}`);
+  }
+  if (record.providerUsage !== null && asRecord(record.providerUsage) === null) problems.push(`${id} providerUsage is invalid`);
+  const transport = asRecord(record.transport);
+  if (!transport) problems.push(`${id} transport is missing`);
+  else if (transport.kind === "OFFLINE_FIXTURE") {
+    if (transport.network !== "blocked") problems.push(`${id} transport is invalid`);
+  } else if (transport.kind === "xai-https") {
+    if (transport.origin !== "https://api.x.ai" || transport.retries !== 0 || transport.storeMessages !== false || transport.tools !== false) {
+      problems.push(`${id} transport is invalid`);
+    }
+  } else problems.push(`${id} transport is invalid`);
+  return problems;
+}
+
+function conversationProblems(value: unknown): string[] {
+  const record = asRecord(value);
+  if (!record) return ["A conversation was not an object"];
+  const id = typeof record.id === "string" && record.id ? record.id : "conversation";
+  const missing = missingKeys(record, ["id", "createdAt", "contextName", "contextText", "contextSha256", "deliveryMode", "provider", "model", "turns"]);
+  if (missing.length > 0) return [`${id} is missing ${missing.join(", ")}`];
+  const problems: string[] = [];
+  if (typeof record.createdAt !== "string") problems.push(`${id} createdAt is invalid`);
+  if (typeof record.contextName !== "string") problems.push(`${id} contextName is invalid`);
+  if (typeof record.contextText !== "string") problems.push(`${id} contextText is invalid`);
+  if (typeof record.contextSha256 !== "string") problems.push(`${id} contextSha256 is invalid`);
+  if (!isDelivery(record.deliveryMode)) problems.push(`${id} delivery is invalid`);
+  if (!isProvider(record.provider)) problems.push(`${id} provider is invalid`);
+  if (typeof record.model !== "string") problems.push(`${id} model is invalid`);
+  if (!Array.isArray(record.turns)) problems.push(`${id} turns is not a list`);
+  else record.turns.forEach((turn, index) => problems.push(...problemsForTurn(turn, `${id} turn ${index + 1}`)));
+  return problems;
 }
 
 function conversationFromTurn(turn: TurnRecord): Conversation {
@@ -421,7 +579,19 @@ function conversationFromTurn(turn: TurnRecord): Conversation {
   };
 }
 
-export function interpretImport(filename: string, text: string): ImportResult {
+async function withHashNote(conversations: Conversation[], base: string): Promise<string> {
+  const lines: string[] = [];
+  for (const conversation of conversations) {
+    const contextHash = await sha256Text(conversation.contextText);
+    if (contextHash !== conversation.contextSha256) lines.push(`${conversation.id} context hash does not match`);
+    for (const turn of conversation.turns) {
+      if (!(await turnHashesMatch(turn))) lines.push(`${turn.id} failed a hash check and will not be replayed`);
+    }
+  }
+  return lines.length > 0 ? `${base} ${lines.join(" ")}` : base;
+}
+
+export async function interpretImport(filename: string, text: string): Promise<ImportResult> {
   const trimmed = text.replace(/^\uFEFF/, "");
   if (!trimmed.trim()) return { kind: "error", note: "That file was empty." };
   const lower = filename.toLowerCase();
@@ -437,32 +607,31 @@ export function interpretImport(filename: string, text: string): ImportResult {
 
   const record = asRecord(parsed);
   if (record?.exportSchema === "cew-session-v1" && Array.isArray(record.conversations)) {
-    const conversations = record.conversations.filter(isConversation);
-    if (conversations.length === 0) return { kind: "error", note: "The session file had no readable conversations." };
+    const problems = record.conversations.flatMap((item) => conversationProblems(item));
+    if (problems.length > 0) return { kind: "error", note: `Did not import. ${problems.join(" ")}` };
+    const conversations = record.conversations as Conversation[];
+    if (conversations.length === 0) return { kind: "error", note: "The session file had no conversations." };
     const count = conversations.length;
-    return {
-      kind: "conversations",
-      conversations,
-      note: `Imported ${count} conversation${count === 1 ? "" : "s"}.`,
-    };
+    const note = await withHashNote(conversations, `Imported ${count} conversation${count === 1 ? "" : "s"}.`);
+    return { kind: "conversations", conversations, note };
   }
 
   if (Array.isArray(parsed)) {
-    const turns = parsed.filter(isTurn);
-    if (turns.length > 0) {
-      return {
-        kind: "conversations",
-        conversations: turns.map(conversationFromTurn),
-        note: `Imported ${turns.length} turn${turns.length === 1 ? "" : "s"}.`,
-      };
-    }
+    const problems = parsed.flatMap((item, index) => problemsForTurn(item, `turn ${index + 1}`));
+    if (parsed.length === 0) return { kind: "error", note: "That file had no turns." };
+    if (problems.length > 0) return { kind: "error", note: `Did not import. ${problems.join(" ")}` };
+    const conversations = (parsed as TurnRecord[]).map(conversationFromTurn);
+    const note = await withHashNote(conversations, `Imported ${parsed.length} turn${parsed.length === 1 ? "" : "s"}.`);
+    return { kind: "conversations", conversations, note };
   }
 
-  if (isTurn(parsed)) {
-    const note = parsed.frozenContextText
-      ? "Imported 1 turn and its injector text."
-      : "Imported 1 turn. Its injector text was empty.";
-    return { kind: "conversations", conversations: [conversationFromTurn(parsed)], note };
+  if (record?.schemaVersion === SCHEMA_VERSION) {
+    const problems = problemsForTurn(parsed, "turn");
+    if (problems.length > 0) return { kind: "error", note: `Did not import. ${problems.join(" ")}` };
+    const turn = parsed as TurnRecord;
+    const base = turn.frozenContextText ? "Imported 1 turn and its injector text." : "Imported 1 turn. Its injector text was empty.";
+    const conversations = [conversationFromTurn(turn)];
+    return { kind: "conversations", conversations, note: await withHashNote(conversations, base) };
   }
 
   if (record && typeof record.text === "string") {
@@ -486,23 +655,59 @@ export function interpretImport(filename: string, text: string): ImportResult {
   return { kind: "error", note: "That JSON is not injector text, a turn, or a session export." };
 }
 
-export function mergeImportedConversations(state: PersistedState, incoming: Conversation[]): PersistedState {
-  const byId = new Map(state.conversations.map((item) => [item.id, item]));
-  for (const conversation of incoming) byId.set(conversation.id, conversation);
-  const last = incoming[incoming.length - 1];
+export async function mergeImportedConversations(
+  state: PersistedState,
+  incoming: Conversation[],
+): Promise<{ state: PersistedState; note: string }> {
+  let conversations = [...state.conversations];
+  let activeId = state.activeId;
+  let draft = state.draft;
+  const notes: string[] = [];
+  for (const incomingConversation of incoming) {
+    const index = conversations.findIndex((item) => item.id === incomingConversation.id);
+    if (index === -1) {
+      conversations = [...conversations, incomingConversation];
+      activeId = incomingConversation.id;
+      draft = draftFromConversation(draft, incomingConversation);
+      continue;
+    }
+    if (canonicalJson(conversations[index]) === canonicalJson(incomingConversation)) {
+      notes.push(`Already saved ${incomingConversation.id}.`);
+      continue;
+    }
+    const suffix = (await sha256Text(canonicalJson(incomingConversation))).slice(0, 12);
+    const altId = `${incomingConversation.id}~${suffix}`;
+    const renamed = { ...incomingConversation, id: altId };
+    const altIndex = conversations.findIndex((item) => item.id === altId);
+    if (altIndex === -1) {
+      conversations = [...conversations, renamed];
+      activeId = altId;
+      draft = draftFromConversation(draft, renamed);
+      notes.push(`Kept saved ${incomingConversation.id}. Stored the different import as ${altId}.`);
+    } else if (canonicalJson(conversations[altIndex]) === canonicalJson(renamed)) {
+      notes.push(`Already saved ${altId}.`);
+    } else {
+      const extraId = `${altId}-2`;
+      const extra = { ...renamed, id: extraId };
+      conversations = [...conversations, extra];
+      activeId = extraId;
+      draft = draftFromConversation(draft, extra);
+      notes.push(`Kept saved ${incomingConversation.id}. Stored the different import as ${extraId}.`);
+    }
+  }
   return {
-    ...state,
-    conversations: [...byId.values()],
-    activeId: last?.id ?? state.activeId,
-    draft: last
-      ? {
-          ...state.draft,
-          name: last.contextName,
-          text: last.contextText,
-          deliveryMode: last.deliveryMode,
-          provider: last.provider,
-          model: last.model,
-        }
-      : state.draft,
+    state: { ...state, conversations, activeId, draft },
+    note: notes.join(" "),
+  };
+}
+
+function draftFromConversation(draft: Draft, conversation: Conversation): Draft {
+  return {
+    ...draft,
+    name: conversation.contextName,
+    text: conversation.contextText,
+    deliveryMode: conversation.deliveryMode,
+    provider: conversation.provider,
+    model: conversation.model,
   };
 }

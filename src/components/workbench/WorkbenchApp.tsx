@@ -112,23 +112,25 @@ export function WorkbenchApp() {
   }
 
   function importFile(name: string, text: string) {
-    const result = interpretImport(name, text);
-    if (result.kind === "error") {
-      setImportProblem(true);
-      setImportNote(result.note);
-      return;
-    }
-    if (result.kind === "context") {
-      onDraft(result.name === null ? { text: result.text } : { text: result.text, name: result.name });
+    void interpretImport(name, text).then(async (result) => {
+      if (result.kind === "error") {
+        setImportProblem(true);
+        setImportNote(result.note);
+        return;
+      }
+      if (result.kind === "context") {
+        onDraft(result.name === null ? { text: result.text } : { text: result.text, name: result.name });
+        setImportProblem(false);
+        setImportNote(result.note);
+        return;
+      }
+      const merged = await mergeImportedConversations(stateRef.current, result.conversations);
+      commit(merged.state);
+      setPinnedTurnId(null);
       setImportProblem(false);
-      setImportNote(result.note);
-      return;
-    }
-    commit(mergeImportedConversations(stateRef.current, result.conversations));
-    setPinnedTurnId(null);
-    setImportProblem(false);
-    setImportNote(result.note);
-    setPanel("dialog");
+      setImportNote([result.note, merged.note].filter((item) => item.length > 0).join(" "));
+      setPanel("dialog");
+    });
   }
 
   function onDraft(patch: Partial<Draft>) {
@@ -153,9 +155,9 @@ export function WorkbenchApp() {
         model: nextConversation.model,
         timeoutSeconds: last?.settings.timeoutSeconds ?? stateRef.current.draft.timeoutSeconds,
         maxOutputTokens: last?.settings.maxOutputTokens ?? stateRef.current.draft.maxOutputTokens,
-        temperature: last?.settings.temperature ?? stateRef.current.draft.temperature,
-        topP: last?.settings.topP ?? stateRef.current.draft.topP,
-        seed: last?.settings.seed ?? null,
+        temperature: last ? last.settings.temperature : stateRef.current.draft.temperature,
+        topP: last ? last.settings.topP : stateRef.current.draft.topP,
+        seed: last ? last.settings.seed : stateRef.current.draft.seed,
       },
     });
     setPinnedTurnId(null);

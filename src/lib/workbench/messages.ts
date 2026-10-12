@@ -2,6 +2,7 @@
    Proprietary. No license is granted to copy, modify, or distribute. */
 
 import { sha256Text, utf8ByteLength } from "./hash.ts";
+import { verifyRecordHash } from "./records.ts";
 import type { ChatMessage, DeliveryMode, TurnRecord, ProviderId } from "./types.ts";
 
 /** messages-json-v1. Key order is role then content. Not sorted. */
@@ -34,15 +35,27 @@ export function assembleMessages(input: {
   return messages;
 }
 
-export function replayableHistory(
+export async function turnHashesMatch(turn: TurnRecord): Promise<boolean> {
+  if (turn.recordSha256 === null) return false;
+  const [contextHash, promptHash, recordOk] = await Promise.all([
+    sha256Text(turn.frozenContextText),
+    promptSha256(turn.assembledMessages),
+    verifyRecordHash(turn),
+  ]);
+  return contextHash === turn.contextSha256 && promptHash === turn.promptSha256 && recordOk;
+}
+
+export async function replayableHistory(
   turns: TurnRecord[],
   provider: ProviderId,
-): { user: string; assistant: string }[] {
+): Promise<{ user: string; assistant: string }[]> {
   const history: { user: string; assistant: string }[] = [];
   for (const turn of turns) {
     if (turn.executionStatus !== "success") continue;
     if (turn.settings.provider !== provider) continue;
-    if (turn.responseText === null) continue;
+    if (turn.responseStatus !== "completed") continue;
+    if (typeof turn.responseText !== "string" || turn.responseText.length === 0) continue;
+    if (!(await turnHashesMatch(turn))) continue;
     history.push({ user: turn.userPrompt, assistant: turn.responseText });
   }
   return history;

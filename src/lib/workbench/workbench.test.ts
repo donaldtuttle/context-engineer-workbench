@@ -17,6 +17,7 @@ import {
   localBlockReason,
   interpretImport,
   mergeImportedConversations,
+  parsePersisted,
   recoverInterrupted,
   startBaseline,
 } from "./session.ts";
@@ -122,7 +123,7 @@ describe("history assembly", () => {
     if (!pending.ok) return;
     const turns = activeConversation(pending.state)?.turns ?? [];
     turns[2] = { ...turns[2], executionStatus: "success", settings: { ...turns[2].settings, provider: "grok" }, responseText: "foreign" };
-    const history = replayableHistory(turns, "mock");
+    const history = await replayableHistory(turns, "mock");
     assert.equal(history.length, 1);
     assert.equal(history[0]?.user, "kept");
     assert.equal(history.some((item) => item.user === "lost" || item.assistant === "foreign"), false);
@@ -272,7 +273,7 @@ describe("snapshots and hashes", () => {
       const record = activeConversation(finalized)?.turns[0];
       assert.equal(record?.executionStatus, "blocked");
       assert.equal(record?.responseText, null);
-      assert.equal(replayableHistory(activeConversation(finalized)?.turns ?? [], "mock").length, 0);
+      assert.equal((await replayableHistory(activeConversation(finalized)?.turns ?? [], "mock")).length, 0);
     } finally {
       globalThis.fetch = original;
     }
@@ -307,7 +308,80 @@ describe("snapshots and hashes", () => {
     assert.equal(turn?.executionStatus, "error");
     assert.equal(turn?.error?.type, "Interrupted");
     assert.ok(turn?.recordSha256);
-    assert.equal(replayableHistory(activeConversation(recovered)?.turns ?? [], "mock").length, 0);
+    assert.equal((await replayableHistory(activeConversation(recovered)?.turns ?? [], "mock")).length, 0);
+  });
+
+  it("does not replay a truncated or malformed success", async () => {
+    const state = await succeed(withDraft({ text: "PROJECT" }), "kept");
+    const began = await beginSend(state, "more", clock());
+    assert.equal(began.ok, true);
+    if (!began.ok) return;
+    const cut = runMockExchange({
+      messages: [],
+      contextText: "PROJECT",
+      promptSha256: "unused",
+      seed: null,
+      blockedReason: null,
+    });
+    const truncated = await commitResult(began.state, began.conversationId, began.turnId, { ...cut, responseStatus: "length", responseText: "cut off" }, LATER);
+    const history = await replayableHistory(activeConversation(truncated)?.turns ?? [], "mock");
+    assert.equal(history.some((item) => item.assistant === "cut off"), false);
+    assert.equal(history.some((item) => item.user === "kept"), true);
+
+    const again = await beginSend(truncated, "malformed-prompt", clock());
+    assert.equal(again.ok, true);
+    if (!again.ok) return;
+    const broken = await commitResult(
+      again.state,
+      again.conversationId,
+      again.turnId,
+      { ...cut, responseStatus: "unknown", responseText: "" },
+      LATER,
+    );
+    const after = await replayableHistory(activeConversation(broken)?.turns ?? [], "mock");
+    assert.equal(after.length, 1);
+    assert.equal(after[0]?.user, "kept");
+  });
+
+  it("rejects a second send started while the first is still opening", async () => {
+    const state = await succeed(withDraft({ text: "PROJECT" }), "kept");
+    const [first, second] = await Promise.all([beginSend(state, "one", clock()), beginSend(state, "two", clock())]);
+    const opened = [first, second].filter((item) => item.ok);
+    assert.equal(opened.length, 1);
+  });
+
+  it("keeps both finalizations when two turns are sealed together", async () => {
+    const began = await beginSend(withDraft({ text: "PROJECT" }), "one", clock());
+    assert.equal(began.ok, true);
+    if (!began.ok) return;
+    const conversation = activeConversation(began.state);
+    const pending = conversation?.turns[0];
+    assert.ok(conversation && pending);
+    const copy = { ...pending, id: "turn-two", userPrompt: "two" };
+    const state = {
+      ...began.state,
+      conversations: began.state.conversations.map((item) =>
+        item.id === conversation.id ? { ...item, turns: [pending, copy] } : item,
+      ),
+    };
+    const receipt = runMockExchange({
+      messages: [],
+      contextText: "PROJECT",
+      promptSha256: "unused",
+      seed: null,
+      blockedReason: null,
+    });
+    const first = commitResult(state, conversation.id, pending.id, receipt, LATER);
+    const second = commitResult(state, conversation.id, copy.id, { ...receipt, responseText: "second" }, LATER);
+    const results = await Promise.all([first, second]);
+    const intact = results.some((item) => {
+      const turns = item.conversations.find((entry) => entry.id === conversation.id)?.turns ?? [];
+      return (
+        turns.find((turn) => turn.id === pending.id)?.executionStatus === "success" &&
+        turns.find((turn) => turn.id === copy.id)?.executionStatus === "success"
+      );
+    });
+    assert.equal(intact, true);
   });
 });
 
@@ -318,50 +392,99 @@ describe("import", () => {
     recordSha256: "abc",
   };
 
-  it("reads injector text, a turn export, and a session export", () => {
-    const context = interpretImport("context.json", JSON.stringify({ name: "Spine", text: "body" }));
+  it("reads injector text, a turn export, and a session export", async () => {
+    const context = await interpretImport("context.json", JSON.stringify({ name: "Spine", text: "body" }));
     assert.equal(context.kind, "context");
     if (context.kind !== "context") return;
     assert.equal(context.text, "body");
     assert.equal(context.name, "Spine");
 
-    const plain = interpretImport("notes.txt", "hello");
+    const plain = await interpretImport("notes.txt", "hello");
     assert.equal(plain.kind, "context");
 
-    const imported = interpretImport("turn-import-1.json", JSON.stringify(turn));
+    const imported = await interpretImport("turn-import-1.json", JSON.stringify(turn));
     assert.equal(imported.kind, "conversations");
     if (imported.kind !== "conversations") return;
     assert.equal(imported.conversations[0]?.contextText, "ctx");
     assert.equal(imported.conversations[0]?.turns.length, 1);
 
-    const emptyTurn = interpretImport("turn.json", JSON.stringify({ ...turn, frozenContextText: "" }));
+    const emptyTurn = await interpretImport("turn.json", JSON.stringify({ ...turn, frozenContextText: "" }));
     assert.equal(emptyTurn.kind, "conversations");
     if (emptyTurn.kind !== "conversations") return;
     assert.match(emptyTurn.note, /empty/);
 
-    const session = interpretImport(
+    const session = await interpretImport(
       "context-engineer-session.json",
       JSON.stringify({ exportSchema: "cew-session-v1", conversations: [imported.conversations[0]] }),
     );
     assert.equal(session.kind, "conversations");
 
-    const rejected = interpretImport("other.json", JSON.stringify({ nope: true }));
+    const rejected = await interpretImport("other.json", JSON.stringify({ nope: true }));
     assert.equal(rejected.kind, "error");
   });
 
-  it("keeps an existing conversation when the imported id is new", () => {
-    const imported = interpretImport("turn-import-1.json", JSON.stringify(turn));
+  it("keeps an existing conversation when the imported id is new", async () => {
+    const imported = await interpretImport("turn-import-1.json", JSON.stringify(turn));
     assert.equal(imported.kind, "conversations");
     if (imported.kind !== "conversations") return;
     const prior = { ...imported.conversations[0], id: "already", contextName: "kept" };
-    const next = mergeImportedConversations(
+    const next = await mergeImportedConversations(
       { ...emptyState(), conversations: [prior], activeId: prior.id },
       imported.conversations,
     );
-    assert.equal(next.conversations.length, 2);
-    assert.equal(next.conversations[0]?.contextName, "kept");
-    assert.equal(next.activeId, imported.conversations[0]?.id);
-    assert.equal(next.draft.text, "ctx");
+    assert.equal(next.state.conversations.length, 2);
+    assert.equal(next.state.conversations[0]?.contextName, "kept");
+    assert.equal(next.state.activeId, imported.conversations[0]?.id);
+    assert.equal(next.state.draft.text, "ctx");
+  });
+
+  it("does not let an older import replace a saved conversation with the same id", async () => {
+    const imported = await interpretImport("turn-import-1.json", JSON.stringify(turn));
+    if (imported.kind !== "conversations") return;
+    const saved = { ...imported.conversations[0], contextName: "newer", contextText: "newer-body" };
+    const older = imported.conversations[0];
+    const next = await mergeImportedConversations({ ...emptyState(), conversations: [saved], activeId: saved.id }, [older]);
+    const kept = next.state.conversations.find((item) => item.id === saved.id);
+    assert.equal(kept?.contextName, "newer");
+    assert.equal(kept?.contextText, "newer-body");
+    assert.ok(next.state.conversations.some((item) => item.id !== saved.id && item.contextText === older.contextText));
+    const duplicate = await mergeImportedConversations(next.state, [older]);
+    assert.equal(duplicate.state.conversations.length, next.state.conversations.length);
+  });
+
+  it("rejects a session that mixes a valid conversation with a record missing fields", async () => {
+    const imported = await interpretImport("turn-import-1.json", JSON.stringify(turn));
+    if (imported.kind !== "conversations") return;
+    const broken = { ...imported.conversations[0], id: "broken", turns: [{ id: "partial" }] };
+    const session = await interpretImport(
+      "context-engineer-session.json",
+      JSON.stringify({ exportSchema: "cew-session-v1", conversations: [imported.conversations[0], broken] }),
+    );
+    assert.equal(session.kind, "error");
+    if (session.kind !== "error") return;
+    assert.match(session.note, /broken|partial|missing/i);
+    assert.doesNotMatch(session.note, /Imported \d+ conversation/);
+  });
+
+  it("keeps a hash-invalid turn for inspection and out of replay", async () => {
+    const tampered = { ...turn, responseText: "changed" };
+    const imported = await interpretImport("turn-import-1.json", JSON.stringify(tampered));
+    assert.equal(imported.kind, "conversations");
+    if (imported.kind !== "conversations") return;
+    assert.match(imported.note, /hash|not be replayed|will not be replayed/i);
+    const history = await replayableHistory(imported.conversations[0]?.turns ?? [], "mock");
+    assert.equal(history.length, 0);
+  });
+
+  it("keeps an explicit null temperature on reload and defaults only a missing field", () => {
+    const draft = { ...emptyState().draft, temperature: null, topP: null };
+    const loaded = parsePersisted(JSON.stringify({ version: 1, draft, conversations: [], activeId: null }));
+    assert.equal(loaded.draft.temperature, null);
+    assert.equal(loaded.draft.topP, null);
+    const { temperature: _temperature, topP: _topP, ...absent } = emptyState().draft;
+    const filled = parsePersisted(JSON.stringify({ version: 1, draft: absent, conversations: [], activeId: null }));
+    assert.equal(filled.draft.temperature, 1);
+    assert.equal(filled.draft.topP, 1);
   });
 });
 
@@ -379,6 +502,21 @@ describe("grok adapter", () => {
     };
     return { fetchImpl, calls };
   }
+
+  it("refuses inherited object keys such as toString before any request", async () => {
+    let calls = 0;
+    const result = await runGrokExchange(
+      { model: "toString", messages: [{ role: "user", content: "ping" }], timeoutSeconds: 30, maxOutputTokens: 32, temperature: null, topP: null, seed: null },
+      enabled,
+      async () => {
+        calls += 1;
+        throw new Error("network");
+      },
+    );
+    assert.equal(calls, 0);
+    assert.equal(result.executionStatus, "blocked");
+    assert.match(result.error?.message ?? "", /No pinned context window/);
+  });
 
   it("pins known windows and refuses to raise them", () => {
     assert.equal(grokModelWindow("grok-4.7"), 500_000);

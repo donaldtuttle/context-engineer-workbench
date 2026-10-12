@@ -14,8 +14,11 @@ export const GROK_WINDOWS: Record<string, number> = {
 };
 
 export function grokModelWindow(model: string): number {
+  if (!Object.hasOwn(GROK_WINDOWS, model)) {
+    throw new Error("No pinned context window for this Grok model");
+  }
   const window = GROK_WINDOWS[model];
-  if (window === undefined) {
+  if (typeof window !== "number") {
     throw new Error("No pinned context window for this Grok model");
   }
   return window;
