@@ -128,8 +128,8 @@ export function WorkbenchApp() {
         model: nextConversation.model,
         timeoutSeconds: last?.settings.timeoutSeconds ?? stateRef.current.draft.timeoutSeconds,
         maxOutputTokens: last?.settings.maxOutputTokens ?? stateRef.current.draft.maxOutputTokens,
-        temperature: last?.settings.temperature ?? null,
-        topP: last?.settings.topP ?? null,
+        temperature: last?.settings.temperature ?? stateRef.current.draft.temperature,
+        topP: last?.settings.topP ?? stateRef.current.draft.topP,
         seed: last?.settings.seed ?? null,
       },
     });
@@ -176,6 +176,8 @@ export function WorkbenchApp() {
             temperature: turn.settings.temperature,
             topP: turn.settings.topP,
             seed: turn.settings.seed,
+            contextText: turn.frozenContextText,
+            contextRole: turn.settings.deliveryMode === "SYSTEM_SLOT" ? "system" : "user",
           },
         });
       }

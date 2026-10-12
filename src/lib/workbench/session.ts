@@ -9,6 +9,8 @@ import {
   MEASUREMENT_SCOPE,
   MOCK_MODEL,
   SCHEMA_VERSION,
+  DEFAULT_TEMPERATURE,
+  DEFAULT_TOP_P,
   emptyState,
   type Clock,
   type Conversation,
@@ -336,7 +338,12 @@ export function parsePersisted(raw: string | null): PersistedState {
     if (parsed.version !== 1 || !parsed.draft || !Array.isArray(parsed.conversations)) return emptyState();
     return {
       version: 1,
-      draft: { ...emptyState().draft, ...parsed.draft },
+      draft: {
+        ...emptyState().draft,
+        ...parsed.draft,
+        temperature: parsed.draft.temperature ?? DEFAULT_TEMPERATURE,
+        topP: parsed.draft.topP ?? DEFAULT_TOP_P,
+      },
       conversations: parsed.conversations,
       activeId: typeof parsed.activeId === "string" ? parsed.activeId : null,
     };

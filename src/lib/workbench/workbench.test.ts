@@ -401,6 +401,65 @@ describe("grok adapter", () => {
     assert.equal(result.contextBudget.contextFloor, 500_000);
     assert.equal(result.contextBudget.contextFloorSource, "model");
     assert.equal(result.countedInputTokens, 2);
+    assert.equal(result.contextBudget.injectionTokens, 0);
+  });
+
+  it("counts injector text and checks it against the input budget before the sample", async () => {
+    const { fetchImpl, calls } = fetchSpy((_url, _body, nth) => {
+      if (nth === 1) return { token_ids: [{ token_id: 1 }, { token_id: 2 }] };
+      if (nth === 2) return { token_ids: [{ token_id: 1 }, { token_id: 2 }, { token_id: 3 }, { token_id: 4 }] };
+      return { id: "resp-inj", model: "grok-4.5", choices: [{ finish_reason: "stop", message: { content: "ok" } }] };
+    });
+    const messages = [
+      { role: "system" as const, content: "SPINE" },
+      { role: "user" as const, content: "ask" },
+    ];
+    const result = await runGrokExchange(
+      {
+        model: "grok-4.5",
+        messages,
+        timeoutSeconds: 30,
+        maxOutputTokens: 64,
+        temperature: null,
+        topP: null,
+        seed: null,
+        contextText: "SPINE",
+        contextRole: "system",
+      },
+      enabled,
+      fetchImpl,
+    );
+    assert.equal(calls.length, 3);
+    assert.equal((calls[0]?.body as { text: string }).text, grokPromptText([{ role: "system", content: "SPINE" }]));
+    assert.equal((calls[1]?.body as { text: string }).text, grokPromptText(messages));
+    assert.equal(calls[2]?.url, "https://api.x.ai/v1/chat/completions");
+    assert.equal(result.executionStatus, "success");
+    assert.equal(result.contextBudget.injectionTokens, 2);
+    assert.equal(result.countedInputTokens, 4);
+  });
+
+  it("blocks when the injector text alone exceeds the input budget", async () => {
+    const { fetchImpl, calls } = fetchSpy(() => ({ token_ids: [{ token_id: 1 }, { token_id: 2 }, { token_id: 3 }] }));
+    const result = await runGrokExchange(
+      {
+        model: "grok-4.5",
+        messages: [{ role: "system", content: "SPINE" }],
+        timeoutSeconds: 30,
+        maxOutputTokens: 16,
+        temperature: null,
+        topP: null,
+        seed: null,
+        contextText: "SPINE",
+        contextRole: "system",
+      },
+      { ...enabled, contextFloor: "18" },
+      fetchImpl,
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(result.executionStatus, "blocked");
+    assert.match(result.error?.message ?? "", /Injector text exceeds/);
+    assert.equal(result.contextBudget.injectionTokens, 3);
+    assert.equal(result.contextBudget.budget, 2);
   });
 
   it("does not sample when the tokenize count is over the budget", async () => {

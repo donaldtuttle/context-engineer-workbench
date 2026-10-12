@@ -29,6 +29,9 @@ export type GrokCallInput = {
   temperature: number | null;
   topP: number | null;
   seed: number | null;
+  /** Frozen injector text. Empty means the injection contributes no tokens. */
+  contextText?: string;
+  contextRole?: "system" | "user";
 };
 
 export function grokAvailable(env: GrokEnv): boolean {
@@ -252,6 +255,7 @@ export async function runGrokExchange(
   }
 
   const budget = floor - input.maxOutputTokens;
+  const contextText = input.contextText ?? "";
   const baseBudget = {
     model: input.model,
     contextFloor: floor,
@@ -259,6 +263,7 @@ export async function runGrokExchange(
     contextFloorSource: source,
     budget,
     countedInputTokens: null as number | null,
+    injectionTokens: contextText.length > 0 ? (null as number | null) : 0,
     countSource: "not_counted",
     blockedReason: null as string | null,
   };
@@ -286,22 +291,52 @@ export async function runGrokExchange(
     return AbortSignal.timeout(remaining);
   };
 
-  let counted: number;
-  try {
+  const countText = async (text: string): Promise<number> => {
     const tokenResponse = await postJson(
       fetchImpl,
       `${XAI_ORIGIN}${TOKENIZE_PATH}`,
-      { model: input.model, text: grokPromptText(input.messages) },
-      env.apiKey,
+      { model: input.model, text },
+      env.apiKey as string,
       signalFor(),
     );
     if (!tokenResponse.ok) {
       const message = tokenResponse.timeout
         ? "The Grok attempt timed out"
         : `Grok tokenize failed${tokenResponse.status ? ` (${tokenResponse.status})` : ""}: ${tokenResponse.detail}`;
-      return failure(tokenResponse.timeout ? "timeout" : "error", tokenResponse.timeout ? "TimeoutError" : "ProviderError", message, baseBudget);
+      const error = new Error(message);
+      error.name = tokenResponse.timeout ? "TimeoutError" : "ProviderError";
+      throw error;
     }
-    counted = readTokenCount(tokenResponse.json);
+    return readTokenCount(tokenResponse.json);
+  };
+
+  if (contextText.length > 0) {
+    try {
+      const injectionTokens = await countText(
+        grokPromptText([{ role: input.contextRole ?? "user", content: contextText }]),
+      );
+      baseBudget.injectionTokens = injectionTokens;
+      if (injectionTokens > budget) {
+        const message = `Injector text exceeds the input budget (${injectionTokens} injection tokens, budget ${budget}). Nothing further was sent.`;
+        return failure("blocked", "ContextWindowError", message, {
+          ...baseBudget,
+          countedInputTokens: injectionTokens,
+          countSource: "xai.tokenize injection text; chat-template overhead is not included",
+          blockedReason: message,
+        });
+      }
+    } catch (error) {
+      if (isTimeout(error)) {
+        return failure("timeout", "TimeoutError", "The Grok attempt timed out", baseBudget);
+      }
+      const message = error instanceof Error ? error.message : "Grok token count was unreadable";
+      return failure("error", "ProviderError", message, baseBudget);
+    }
+  }
+
+  let counted: number;
+  try {
+    counted = await countText(grokPromptText(input.messages));
   } catch (error) {
     if (isTimeout(error)) {
       return failure("timeout", "TimeoutError", "The Grok attempt timed out", baseBudget);

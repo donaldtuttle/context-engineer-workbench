@@ -6,6 +6,8 @@ export const MESSAGE_SCHEMA = "messages-json-v1" as const;
 export const MOCK_MODEL = "fixture-echo-v2";
 export const DEFAULT_TIMEOUT_SECONDS = 30;
 export const DEFAULT_MAX_OUTPUT_TOKENS = 512;
+export const DEFAULT_TEMPERATURE = 1;
+export const DEFAULT_TOP_P = 1;
 export const LOCAL_BYTE_CEILING = 1_500_000;
 export const MEASUREMENT_SCOPE =
   "Local counts are UTF-8 bytes of the context text and of messages-json-v1. A Grok token count, when present, is xAI tokenize on role-labeled message text and excludes chat-template overhead. These counts do not verify model compliance.";
@@ -44,6 +46,8 @@ export type ContextBudget = {
   contextFloorSource: string;
   budget: number | null;
   countedInputTokens: number | null;
+  /** Tokens in the injector text alone. Omitted on records that never measured it. */
+  injectionTokens?: number | null;
   countSource: string;
   blockedReason: string | null;
 };
@@ -167,8 +171,8 @@ export function defaultDraft(): Draft {
     model: "grok-4.5",
     timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
     maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-    temperature: null,
-    topP: null,
+    temperature: DEFAULT_TEMPERATURE,
+    topP: DEFAULT_TOP_P,
     seed: null,
   };
 }

@@ -65,6 +65,9 @@ export function InjectorPanel(props: Props) {
         <span className="text-xs text-muted">Context SHA-256</span>
         <p className="font-mono text-xs break-all text-fg">{props.contextHash || "…"}</p>
         <p className="text-xs text-subtle">{bytes.toLocaleString()} UTF-8 bytes. Renaming does not reset history.</p>
+        <p className="text-xs text-subtle">
+          Bytes are not tokens. On a Grok send, this text is counted on its own. That count is checked against the input budget before the reply is requested.
+        </p>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -144,10 +147,15 @@ export function InjectorPanel(props: Props) {
         <div className="mt-3 grid gap-3">
           <NumberField label="Timeout seconds" value={draft.timeoutSeconds} onChange={(timeoutSeconds) => props.onDraft({ timeoutSeconds })} />
           <NumberField label="Max output tokens" value={draft.maxOutputTokens} onChange={(maxOutputTokens) => props.onDraft({ maxOutputTokens })} />
-          <OptionalNumber label="Temperature" value={draft.temperature} onChange={(temperature) => props.onDraft({ temperature })} />
-          <OptionalNumber label="Top-p" value={draft.topP} onChange={(topP) => props.onDraft({ topP })} />
+          <p className="text-xs text-subtle">
+            Caps the visible reply only. Default is 512. Range is 16 to 8192. This is not the context window. The input budget is the window minus this number. Status length means the reply was cut off here. Reasoning tokens are separate and are not part of this cap.
+          </p>
+          <NumberField label="Temperature" value={draft.temperature ?? 1} onChange={(temperature) => props.onDraft({ temperature })} />
+          <NumberField label="Top-p" value={draft.topP ?? 1} onChange={(topP) => props.onDraft({ topP })} />
           <OptionalNumber label="Seed" value={draft.seed} integer onChange={(seed) => props.onDraft({ seed })} />
-          <p className="text-xs text-subtle">Blank temperature, top-p, and seed are omitted from the Grok request.</p>
+          <p className="text-xs text-subtle">
+            Temperature 1 and top-p 1 are the provider defaults. Edit them to send a different value. Seed has no default. Leave it blank for a fresh sample.
+          </p>
         </div>
       </details>
 
@@ -243,7 +251,7 @@ function OptionalNumber(props: {
         className={field}
         inputMode={props.integer ? "numeric" : "decimal"}
         value={props.value ?? ""}
-        placeholder="Omit"
+        placeholder="None"
         onChange={(event) => {
           const raw = event.target.value.trim();
           if (!raw) {

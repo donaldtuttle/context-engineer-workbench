@@ -54,6 +54,15 @@ function parseCall(data: unknown): GrokCallInput | { error: string } {
   if (!(seed === null || (typeof seed === "number" && Number.isInteger(seed)))) {
     return { error: "Seed must be empty or an integer." };
   }
+  const contextText = body.contextText === undefined ? "" : body.contextText;
+  if (typeof contextText !== "string") return { error: "Injector text was unreadable." };
+  let contextRole: "system" | "user" | undefined;
+  if (contextText.length > 0) {
+    if (body.contextRole !== "system" && body.contextRole !== "user") {
+      return { error: "Injector delivery was unreadable." };
+    }
+    contextRole = body.contextRole;
+  }
   return {
     model: body.model,
     messages,
@@ -62,6 +71,8 @@ function parseCall(data: unknown): GrokCallInput | { error: string } {
     temperature,
     topP,
     seed,
+    contextText,
+    contextRole,
   };
 }
 

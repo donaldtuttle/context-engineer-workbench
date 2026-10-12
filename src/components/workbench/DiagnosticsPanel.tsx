@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { Download } from "lucide-react";
 import { verifyRecordHash } from "@/lib/workbench/records";
-import type { Conversation, TurnRecord } from "@/lib/workbench/types";
+import { DEFAULT_TEMPERATURE, DEFAULT_TOP_P, type Conversation, type TurnRecord } from "@/lib/workbench/types";
 
 type Props = {
   conversation: Conversation | null;
@@ -125,21 +125,30 @@ function Hash(props: { label: string; value: string }) {
 function Readout(props: { turn: TurnRecord }) {
   const { turn } = props;
   const usage = turn.providerUsage;
+  const injection = turn.contextBudget.injectionTokens;
   const rows: [string, string][] = [
     ["Status", turn.executionStatus],
     ["Delivery", turn.settings.deliveryMode],
     ["Requested model", turn.requestedModel],
-    ["Returned model", turn.returnedModel ?? "null"],
-    ["Response status", turn.responseStatus ?? "null"],
+    ["Returned model", turn.returnedModel ?? "not returned"],
+    ["Response status", turn.responseStatus ?? "not finished"],
+    ["Max output tokens", String(turn.settings.maxOutputTokens)],
+    ["Temperature", turn.settings.temperature === null ? `${DEFAULT_TEMPERATURE} · provider default` : String(turn.settings.temperature)],
+    ["Top-p", turn.settings.topP === null ? `${DEFAULT_TOP_P} · provider default` : String(turn.settings.topP)],
+    ["Seed", turn.settings.seed === null ? "none" : String(turn.settings.seed)],
     ["Messages", String(turn.preflight.messageCount)],
     ["Context bytes", turn.preflight.contextUtf8Bytes.toLocaleString()],
+    ["Injection tokens", injection === undefined || injection === null ? "not counted" : injection.toLocaleString()],
     ["Prompt bytes", turn.preflight.promptUtf8Bytes.toLocaleString()],
-    ["Counted input tokens", turn.preflight.countedInputTokens === null ? "null" : String(turn.preflight.countedInputTokens)],
+    ["Counted input tokens", turn.preflight.countedInputTokens === null ? "not counted" : turn.preflight.countedInputTokens.toLocaleString()],
     ["Count source", turn.preflight.countSource],
-    ["Provider usage", usage ? JSON.stringify(usage) : "null"],
-    ["Window", turn.contextBudget.modelContextWindow === null ? "null" : String(turn.contextBudget.modelContextWindow)],
-    ["Floor", turn.contextBudget.contextFloor === null ? "null" : `${turn.contextBudget.contextFloor} (${turn.contextBudget.contextFloorSource})`],
-    ["Budget", turn.contextBudget.budget === null ? "null" : String(turn.contextBudget.budget)],
+    ["Provider input", usage?.input_tokens === undefined ? "not reported" : usage.input_tokens.toLocaleString()],
+    ["Provider output", usage?.output_tokens === undefined ? "not reported" : usage.output_tokens.toLocaleString()],
+    ["Reasoning tokens", usage?.reasoning_tokens === undefined ? "not reported" : usage.reasoning_tokens.toLocaleString()],
+    ["Provider total", usage?.total_tokens === undefined ? "not reported" : usage.total_tokens.toLocaleString()],
+    ["Window", turn.contextBudget.modelContextWindow === null ? "not measured" : turn.contextBudget.modelContextWindow.toLocaleString()],
+    ["Floor", turn.contextBudget.contextFloor === null ? "not measured" : `${turn.contextBudget.contextFloor.toLocaleString()} (${turn.contextBudget.contextFloorSource})`],
+    ["Input budget", turn.contextBudget.budget === null ? "not measured" : turn.contextBudget.budget.toLocaleString()],
   ];
   return (
     <div className="grid gap-3 rounded-lg bg-surface p-3">
@@ -150,6 +159,12 @@ function Readout(props: { turn: TurnRecord }) {
         </div>
       ))}
       <p className="text-sm text-muted">{turn.preflight.measurementScope}</p>
+      <p className="text-sm text-muted">
+        Max output tokens limit the visible reply. Status length means that cap was hit. Reasoning tokens are extra. Provider input can be higher than the counted input because the chat template is not in the tokenize count.
+      </p>
+      <p className="text-sm text-muted">
+        Injection tokens are the injector text alone. They are checked against the input budget before the rest of the request. The counted input is the whole request, including that injection, and that total is checked again before the reply is requested.
+      </p>
     </div>
   );
 }
@@ -158,13 +173,13 @@ function Meter(props: { turn: TurnRecord }) {
   const counted = props.turn.contextBudget.countedInputTokens;
   const budget = props.turn.contextBudget.budget;
   if (counted === null || budget === null || budget <= 0) {
-    return <p className="text-sm text-muted">No token-budget chart for this turn. Usage stays null when the provider does not report it.</p>;
+    return <p className="text-sm text-muted">No token-budget chart for this turn. The provider did not report a count.</p>;
   }
   const ratio = Math.max(0, Math.min(counted / budget, 1));
   const width = counted > 0 ? Math.max(ratio * 100, 1.5) : 0;
   return (
     <div className="grid gap-2">
-      <p className="text-xs text-muted">Counted input against budget</p>
+      <p className="text-xs text-muted">Counted input, including the injection, against the input budget</p>
       <div className="h-3 overflow-hidden rounded-sm bg-raised" aria-hidden="true">
         <div className="h-full bg-trace" style={{ width: `${width}%` }} />
       </div>
