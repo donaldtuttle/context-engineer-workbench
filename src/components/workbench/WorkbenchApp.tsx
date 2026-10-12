@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { DiagnosticsPanel } from "@/components/workbench/DiagnosticsPanel";
 import { DialogPanel } from "@/components/workbench/DialogPanel";
 import { InjectorPanel } from "@/components/workbench/InjectorPanel";
-import { STORAGE_KEY, downloadJson } from "@/lib/workbench/download";
+import { STORAGE_KEY, downloadJson, shareExport, type ExportOutcome } from "@/lib/workbench/download";
 import { grokAvailability, runGrokTurn } from "@/lib/workbench/grok-api";
 import { runMockExchange } from "@/lib/workbench/mock";
 import {
@@ -47,6 +47,10 @@ export function WorkbenchApp() {
     reason: "Checking the Grok adapter.",
   });
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [exportNote, setExportNote] = useState<string | null>(null);
+  const [bundle, setBundle] = useState<{ filename: string; text: string } | null>(null);
+  const shellRef = useRef<HTMLElement>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -184,18 +188,64 @@ export function WorkbenchApp() {
     commit(next);
   }
 
+  useEffect(() => {
+    const shell = shellRef.current;
+    const frame = window.visualViewport;
+    if (!shell || !frame) return;
+    const place = () => {
+      shell.style.top = `${frame.offsetTop}px`;
+      shell.style.height = `${frame.height}px`;
+    };
+    place();
+    frame.addEventListener("resize", place);
+    frame.addEventListener("scroll", place);
+    window.addEventListener("orientationchange", place);
+    return () => {
+      frame.removeEventListener("resize", place);
+      frame.removeEventListener("scroll", place);
+      window.removeEventListener("orientationchange", place);
+    };
+  }, []);
+
+  async function saveExport(filename: string, value: unknown) {
+    const result = await downloadJson(filename, value);
+    applyExport(result);
+  }
+
+  function applyExport(result: ExportOutcome) {
+    if (result.kind === "manual") {
+      setBundle({ filename: result.filename, text: result.text });
+      if (navigator.clipboard?.writeText) {
+        void navigator.clipboard.writeText(result.text).then(
+          () => setExportNote("Copied. The text stays on screen if you need it again."),
+          () => setExportNote(result.message),
+        );
+        return;
+      }
+      setExportNote(result.message);
+      return;
+    }
+    setBundle(null);
+    setExportNote(result.message);
+  }
+
   const panelClass = (id: PanelId, scroll: boolean) =>
     `${panel === id ? "flex" : "hidden"} h-full min-h-0 flex-col ${scroll ? "overflow-y-auto" : "overflow-hidden"} border-line lg:flex lg:border-r lg:last:border-r-0`;
 
   return (
-    <main className="flex h-dvh flex-col bg-bg text-fg">
-      <header className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+    <main ref={shellRef} className="fixed inset-x-0 top-0 flex h-dvh flex-col overflow-hidden bg-bg text-fg">
+      <header className={`flex items-center justify-between gap-3 border-b border-line px-4 py-3 ${composerFocused ? "max-lg:hidden" : ""}`}>
         <div className="grid gap-0.5">
           <p className="text-xs text-muted">Local records</p>
           <h1 className="text-lg font-medium">Context Engineer</h1>
         </div>
         <p className="text-xs text-subtle">v1</p>
       </header>
+      {exportNote ? (
+        <p className="border-b border-line px-4 py-2 text-sm text-muted" role="status">
+          {exportNote}
+        </p>
+      ) : null}
       <nav className="grid grid-cols-3 border-b border-line lg:hidden" aria-label="Panels">
         {(
           [
@@ -228,9 +278,7 @@ export function WorkbenchApp() {
             onDraft={onDraft}
             onClear={() => onDraft({ text: "" })}
             onImport={(file) => void importContext(file, onDraft, setNote)}
-            onExportContext={() =>
-              downloadJson(`${state.draft.name || "context"}.json`, { name: state.draft.name, text: state.draft.text })
-            }
+            onExportContext={() => void saveExport(`${state.draft.name || "context"}.json`, { name: state.draft.name, text: state.draft.text })}
             onBaseline={() => {
               void startBaseline(stateRef.current).then((next) => {
                 commit(next);
@@ -250,7 +298,7 @@ export function WorkbenchApp() {
               setPinnedTurnId(null);
             }}
             onExportSession={() =>
-              downloadJson("context-engineer-session.json", {
+              void saveExport("context-engineer-session.json", {
                 exportSchema: "cew-session-v1",
                 exportedAt: new Date().toISOString(),
                 conversations: state.conversations,
@@ -267,6 +315,7 @@ export function WorkbenchApp() {
             pending={pending}
             onPrompt={setPrompt}
             onSend={() => void onSend()}
+            onComposerFocus={setComposerFocused}
           />
         </section>
         <section className={panelClass("diagnostics", true)} aria-label="Diagnostics">
@@ -275,11 +324,64 @@ export function WorkbenchApp() {
             turn={selected}
             onSelect={setPinnedTurnId}
             onExport={() => {
-              if (selected?.recordSha256) downloadJson(`turn-${selected.id}.json`, selected);
+              if (selected) void saveExport(`turn-${selected.id}.json`, selected);
             }}
           />
         </section>
       </div>
+      {bundle ? (
+        <div className="absolute inset-0 z-20 flex min-h-0 flex-col bg-bg">
+          <header className="grid gap-1 border-b border-line p-4">
+            <h2 className="text-lg font-medium">Export</h2>
+            <p className="text-sm text-muted break-all">{bundle.filename}</p>
+            <p className="text-sm text-muted">Copy this, or share it if the sheet is available.</p>
+          </header>
+          <textarea
+            readOnly
+            spellCheck={false}
+            className="min-h-0 w-full flex-1 resize-none bg-bg px-4 py-3 font-mono text-base text-fg"
+            value={bundle.text}
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <div className="grid grid-cols-2 gap-2 border-t border-line p-4 pb-safe">
+            <button
+              type="button"
+              className="min-h-11 rounded-md bg-accent px-3 text-sm font-medium text-accent-fg"
+              onClick={() => {
+                const text = bundle.text;
+                const done = () => setExportNote("Copied.");
+                if (navigator.clipboard?.writeText) {
+                  void navigator.clipboard.writeText(text).then(done).catch(() => setExportNote("Select the text, then copy."));
+                  return;
+                }
+                setExportNote("Select the text, then copy.");
+              }}
+            >
+              Copy
+            </button>
+            <button
+              type="button"
+              className="min-h-11 rounded-md border border-line px-3 text-sm"
+              onClick={() => {
+                void shareExport(bundle.filename, bundle.text).then((shared) => {
+                  if (shared === "shared") setExportNote("Opened the share sheet. Save the file from there.");
+                  else if (shared === "cancelled") setExportNote("Export cancelled.");
+                  else setExportNote("Share is not available here. Copy the text.");
+                });
+              }}
+            >
+              Share
+            </button>
+            <button
+              type="button"
+              className="col-span-2 min-h-11 rounded-md border border-line px-3 text-sm"
+              onClick={() => setBundle(null)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

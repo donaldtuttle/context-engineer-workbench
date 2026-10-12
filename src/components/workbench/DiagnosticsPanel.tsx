@@ -101,8 +101,7 @@ export function DiagnosticsPanel(props: Props) {
 
           <button
             type="button"
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm disabled:opacity-50"
-            disabled={!turn.recordSha256}
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-line px-3 text-sm"
             onClick={props.onExport}
           >
             <Download className="size-4" aria-hidden="true" />
