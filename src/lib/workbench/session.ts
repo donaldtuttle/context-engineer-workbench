@@ -472,7 +472,7 @@ function nullableNumber(value: unknown): boolean {
 }
 
 function nonNegativeInt(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function nullableNonNegativeInt(value: unknown): boolean {
@@ -524,7 +524,7 @@ function problemsForTurn(value: unknown, label: string): string[] {
       problems.push(`${id} settings temperature is invalid`);
     } else if (!nullableNumber(settings.topP) || (typeof settings.topP === "number" && (settings.topP < 0 || settings.topP > 1))) {
       problems.push(`${id} settings topP is invalid`);
-    } else if (settings.seed !== null && !Number.isInteger(settings.seed)) {
+    } else if (settings.seed !== null && !Number.isSafeInteger(settings.seed)) {
       problems.push(`${id} settings seed is invalid`);
     }
   }
@@ -624,6 +624,39 @@ function conversationProblems(value: unknown): string[] {
   if (!Array.isArray(record.turns)) problems.push(`${id} turns is not a list`);
   else record.turns.forEach((turn, index) => problems.push(...problemsForTurn(turn, `${id} turn ${index + 1}`)));
   return problems;
+}
+
+/** Validate saved data without normalizing or rehashing historical records. */
+export function assertPersistedState(value: unknown): asserts value is PersistedState {
+  const state = asRecord(value);
+  if (!state || state.version !== 1 || !Array.isArray(state.conversations)) throw new Error("Saved session envelope is invalid");
+  const draft = asRecord(state.draft);
+  if (!draft || typeof draft.name !== "string" || typeof draft.text !== "string" ||
+      typeof draft.model !== "string" || !isProvider(draft.provider) || !isDelivery(draft.deliveryMode)) {
+    throw new Error("Saved draft is invalid");
+  }
+  // A draft may contain unfinished numeric edits; preserve finite values, never coerce them.
+  for (const key of ["timeoutSeconds", "maxOutputTokens"]) {
+    if (typeof draft[key] !== "number" || !Number.isFinite(draft[key])) throw new Error(`Saved draft ${key} is invalid`);
+  }
+  for (const key of ["temperature", "topP", "seed"]) {
+    if (!nullableNumber(draft[key])) throw new Error(`Saved draft ${key} is invalid`);
+  }
+  if (state.activeId !== null && typeof state.activeId !== "string") throw new Error("Saved active conversation is invalid");
+  const ids = new Set<string>();
+  for (const conversation of state.conversations) {
+    const problems = conversationProblems(conversation);
+    if (problems.length) throw new Error(problems.join("; "));
+    const item = conversation as Conversation;
+    if (!item.id || ids.has(item.id)) throw new Error("Saved conversation ID is missing or duplicated");
+    ids.add(item.id);
+    const turns = new Set<string>();
+    for (const turn of item.turns) {
+      if (turns.has(turn.id)) throw new Error("Saved turn ID is duplicated");
+      turns.add(turn.id);
+    }
+  }
+  if (state.activeId !== null && !ids.has(state.activeId)) throw new Error("Saved active conversation does not exist");
 }
 
 function conversationFromTurn(turn: TurnRecord): Conversation {

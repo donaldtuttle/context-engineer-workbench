@@ -20,6 +20,7 @@ export type PaidEnv = GrokEnv & {
 export type PaidRequest = {
   origin: string | null;
   host: string;
+  expectedOrigin?: string;
 };
 
 const CLIENT_KEY = "deployment";
@@ -28,7 +29,7 @@ export function clientKeyFromHeaders(_headers: { get(name: string): string | nul
   return CLIENT_KEY;
 }
 
-function blocked(message: string, model = ""): ExchangeResult {
+function blocked(message: string, model = "unavailable"): ExchangeResult {
   return {
     executionStatus: "blocked",
     responseText: null,
@@ -63,9 +64,10 @@ function validation(message: string): ExchangeResult {
 }
 
 export function sameSite(request: PaidRequest): boolean {
-  if (!request.origin) return true;
+  if (!request.origin) return false;
   try {
-    return new URL(request.origin).host === request.host;
+    const origin = new URL(request.origin);
+    return origin.origin === (request.expectedOrigin ?? `https://${request.host}`) && request.origin === origin.origin;
   } catch {
     return false;
   }
@@ -73,11 +75,14 @@ export function sameSite(request: PaidRequest): boolean {
 
 export function billedTokens(usage: Usage | null): number | null {
   if (!usage) return null;
-  const hasCategory = usage.input_tokens !== undefined || usage.output_tokens !== undefined || usage.reasoning_tokens !== undefined;
+  for (const count of Object.values(usage)) {
+    if (!Number.isSafeInteger(count) || count < 0) return null;
+  }
+  // Partial categories cannot establish total usage. Keep the hold.
+  if (usage.total_tokens === undefined) return null;
   const sum = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.reasoning_tokens ?? 0);
-  if (!hasCategory && usage.total_tokens === undefined) return null;
-  if (!hasCategory) return usage.total_tokens ?? null;
-  return usage.total_tokens === undefined ? sum : Math.max(usage.total_tokens, sum);
+  const total = Math.max(usage.total_tokens, sum);
+  return Number.isSafeInteger(total) ? total : null;
 }
 
 function readSuppliedToken(data: unknown): { ok: true; token: string } | { ok: false; reason: string } {
@@ -147,6 +152,15 @@ export async function parsePaidCall(data: unknown): Promise<{ input: Parameters<
   } else if (body.contextRole !== undefined) {
     return { error: "Empty context cannot declare a delivery role." };
   }
+  for (const key of ["contextSha256", "promptSha256"]) {
+    if (Object.hasOwn(body, key) && (typeof body[key] !== "string" || !/^[a-f0-9]{64}$/.test(body[key] as string))) {
+      return { error: `${key} must be a SHA-256 hex string.` };
+    }
+  }
+  const dialog = messages.slice(contextText.length > 0 ? 1 : 0);
+  if (dialog.length === 0 || dialog.length % 2 !== 1 || dialog.some((message, index) => message.role !== (index % 2 ? "assistant" : "user"))) {
+    return { error: "Messages must contain completed user/assistant pairs followed by the latest user prompt." };
+  }
   if (typeof body.contextSha256 === "string") {
     const actual = await sha256Text(contextText);
     if (actual !== body.contextSha256) return { error: "The context hash does not match the submitted text." };
@@ -190,7 +204,7 @@ export async function executePaidTurn(args: {
   if (args.env.enableFlag !== "1" || !args.env.apiKey) {
     return blocked("Requires WORKBENCH_ENABLE_GROK=1 and server-side XAI_API_KEY");
   }
-  const configured = (args.env.accessToken ?? "").trim();
+  const configured = args.env.accessToken ?? "";
   const configError = accessConfigError(configured);
   if (configError) return blocked(configError);
   const supplied = readSuppliedToken(args.data);
@@ -208,7 +222,10 @@ export async function executePaidTurn(args: {
   }
   const nowMs = args.nowMs ?? Date.now();
   const period = utcPeriod(nowMs);
-  const hold = conservativeHold(promptByteLength(parsed.input.messages), parsed.input.maxOutputTokens);
+  const messageBytes = utf8ByteLength(parsed.input.messages.map((m) => `${m.role}\n${m.content}`).join("\n"));
+  const injectorBytes = parsed.input.contextText ? utf8ByteLength(`${parsed.input.contextRole}\n${parsed.input.contextText}`) : 0;
+  const tokenizerAllowance = messageBytes + injectorBytes;
+  const hold = conservativeHold(messageBytes, parsed.input.maxOutputTokens, injectorBytes);
   let reservation;
   try {
     reservation = await args.store.reserve({
@@ -223,19 +240,29 @@ export async function executePaidTurn(args: {
   }
   if (!reservation.ok) return blocked(reservation.reason);
   let result: ExchangeResult;
+  let providerCalls = 0;
+  let completionAttempted = false;
+  const trackedFetch: typeof fetch = async (url, init) => {
+    providerCalls += 1;
+    if (String(url).endsWith("/chat/completions")) completionAttempted = true;
+    return args.fetchImpl(url, init);
+  };
   try {
-    result = await runGrokExchange(parsed.input, args.env, args.fetchImpl);
+    result = await runGrokExchange(parsed.input, args.env, trackedFetch);
   } catch {
-    try {
-      await args.store.reconcile({ reservationId: reservation.reservation.id, actualTokens: null });
-    } catch {
-      // The reservation stays. A second reconcile is not attempted.
-    }
-    return blocked("The paid request failed before a provider result was recorded. The reserved allowance was kept.");
+    return { ...blocked("The provider outcome is unknown. The allowance and concurrency reservation remain held for operator review."), executionStatus: "error" };
   }
-  const settled = billedTokens(result.providerUsage);
+  const reported = billedTokens(result.providerUsage);
+  // Tokenizer usage is not included in completion usage; keep its separate allowance.
+  const settled = providerCalls === 0 ? 0
+    : !completionAttempted && result.executionStatus === "blocked" ? tokenizerAllowance
+    : reported === null ? null : reported + tokenizerAllowance;
+  let reconciled = false;
   try {
-    await args.store.reconcile({ reservationId: reservation.reservation.id, actualTokens: settled });
+    if (result.executionStatus !== "timeout") {
+      await args.store.reconcile({ reservationId: reservation.reservation.id, actualTokens: settled });
+      reconciled = true;
+    }
   } catch {
     // The provider result is kept. Unknown reconciliation leaves the reservation in place.
   }
@@ -244,7 +271,7 @@ export async function executePaidTurn(args: {
     quotaAccounting: {
       period,
       reservedTokens: reservation.reservation.reservedTokens,
-      settledTokens: settled,
+      settledTokens: reconciled ? settled : null,
     },
   };
 }

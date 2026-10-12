@@ -36,7 +36,7 @@ export function cappedWindow(
     throw new Error("WORKBENCH_GROK_CONTEXT_FLOOR must be an integer");
   }
   const cap = Number(raw);
-  if (cap < 1) throw new Error("WORKBENCH_GROK_CONTEXT_FLOOR must be positive");
+  if (!Number.isSafeInteger(cap) || cap < 1) throw new Error("WORKBENCH_GROK_CONTEXT_FLOOR must be a positive safe integer");
   if (cap >= documented) return { floor: documented, source: "model" };
   return { floor: cap, source: "env_cap" };
 }

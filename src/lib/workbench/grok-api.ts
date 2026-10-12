@@ -21,7 +21,7 @@ function refusal(message: string): ExchangeResult {
     countedInputTokens: null,
     countSource: "not_counted",
     contextBudget: {
-      model: "",
+      model: "unavailable",
       contextFloor: null,
       modelContextWindow: null,
       contextFloorSource: "unavailable",
@@ -60,7 +60,7 @@ export const runGrokTurn = createServerFn({ method: "POST" })
     try {
       const incoming = getRequest();
       const url = new URL(incoming.url);
-      request = { origin: incoming.headers.get("origin"), host: url.host };
+      request = { origin: incoming.headers.get("origin"), host: url.host, expectedOrigin: url.origin };
       headers = incoming.headers;
     } catch {
       request = { origin: null, host: "" };

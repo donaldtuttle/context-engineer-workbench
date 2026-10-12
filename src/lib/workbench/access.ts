@@ -12,7 +12,7 @@ export const ACCESS_TOKEN_MIN_CHARS = 32;
 
 export function accessConfigError(raw: string | undefined): string | null {
   if (raw === undefined || raw.trim() === "") return "WORKBENCH_ACCESS_TOKEN is not configured";
-  const token = raw.trim();
+  const token = raw;
   if (token.length > ACCESS_TOKEN_MAX_CHARS) return "WORKBENCH_ACCESS_TOKEN is too long";
   if (!/^[A-Za-z0-9_-]+$/.test(token) || token.length < ACCESS_TOKEN_MIN_CHARS) {
     return "WORKBENCH_ACCESS_TOKEN must be at least 32 characters from the set A-Z, a-z, 0-9, underscore, and hyphen";

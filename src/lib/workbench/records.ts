@@ -35,7 +35,7 @@ export async function finalizeTurn(
     providerResponseId: result.providerResponseId,
     providerUsage: result.providerUsage,
     reasoningEncryptedOmitted: result.reasoningEncryptedOmitted,
-    contextBudget: result.contextBudget,
+    contextBudget: { ...result.contextBudget, model: result.contextBudget.model || turn.requestedModel },
     preflight: {
       ...turn.preflight,
       countedInputTokens: result.countedInputTokens,

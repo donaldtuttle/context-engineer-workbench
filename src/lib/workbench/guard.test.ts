@@ -213,7 +213,7 @@ describe("access token", () => {
       env: env({ sharedStore: false }),
       fetchImpl,
       store: new MemoryQuotaStore(),
-      request: { origin: null, host: "app.example" },
+      request: { origin: "https://app.example", host: "app.example" },
       nowMs: Date.parse("2026-10-12T12:00:00.000Z"),
     });
     assert.match(locked.error?.message ?? "", /shared quota store/);
@@ -222,7 +222,7 @@ describe("access token", () => {
       env: env({ quota: { ok: false, reason: "WORKBENCH_DAILY_TOKEN_CAP must be from 1 to 100000000" } }),
       fetchImpl,
       store: new MemoryQuotaStore(),
-      request: { origin: null, host: "app.example" },
+      request: { origin: "https://app.example", host: "app.example" },
       nowMs: Date.parse("2026-10-12T12:00:00.000Z"),
     });
     assert.match(broken.error?.message ?? "", /WORKBENCH_DAILY_TOKEN_CAP/);
@@ -240,7 +240,7 @@ describe("access token", () => {
       env: env(),
       fetchImpl,
       store: new MemoryQuotaStore(),
-      request: { origin: null, host: "app.example" },
+      request: { origin: "https://app.example", host: "app.example" },
       nowMs: Date.parse("2026-10-12T12:00:00.000Z"),
     });
     assert.equal(result.executionStatus, "error");
@@ -323,7 +323,7 @@ describe("quota allowance", () => {
         throw new Error("should not run");
       },
       store,
-      request: { origin: null, host: "app.example" },
+      request: { origin: "https://app.example", host: "app.example" },
       nowMs: Date.parse("2026-10-12T12:00:00.000Z"),
     });
     assert.equal(calls, 0);
@@ -566,7 +566,7 @@ describe("client credential surface", () => {
       assert.equal(text.includes("process.env.WORKBENCH_ACCESS_TOKEN"), false, file);
       assert.equal(text.includes(TOKEN), false, file);
     }
-    const clientDirs = ["dist/client", ".output/public"].filter((dir) => existsSync(dir));
+    const clientDirs = ["dist/client", ".output/public", ".vercel/output/static"].filter((dir) => existsSync(dir));
     for (const dir of clientDirs) {
       const stack = [dir];
       while (stack.length > 0) {

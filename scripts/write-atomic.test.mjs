@@ -174,11 +174,11 @@ test("every hand-over the og skill prints is one this script accepts", () => {
       ]
     : [join(TEMPLATE_ROOT, "scripts/write-atomic.mjs")];
   const invocations = docs.flatMap(
-    (path) => readFileSync(path, "utf8").match(/node scripts\/write-atomic\.mjs[^\n`]*/g) ?? [],
+    (path) => readFileSync(path, "utf8").match(/^\s*\*?\s*(node scripts\/write-atomic\.mjs[^\n`]*)/gm) ?? [],
   );
   assert.ok(invocations.length >= 3, "og.jpg, x-banner.jpg and site.json each hand over");
   for (const line of invocations) {
-    const argv = line.replace("node scripts/write-atomic.mjs", "").trim().split(/\s+/);
+    const argv = line.replace(/^.*?node scripts\/write-atomic\.mjs/, "").trim().split(/\s+/);
     const args = parseWriteAtomicArgs(argv);
     assert.equal(args.error, undefined, line);
     assert.equal(

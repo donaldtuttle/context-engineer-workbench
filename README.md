@@ -109,9 +109,22 @@ These variables are optional. Invalid values lock paid Grok instead of falling b
 
 Each value must be an integer from 1 up to 1000, 100000, 100000000, and 32, in that order.
 
-The allowance is requests and tokens. It is not a dollar ceiling. The provider can bill categories this estimate does not see. A reservation is held before any xAI call. If usage is missing, that reservation is kept. Reported usage replaces the estimate when it is present.
+The allowance is requests and tokens. It is not a dollar ceiling. The provider can bill categories this estimate does not see. A reservation is held before any xAI call. If usage is missing, that reservation is kept. Only usable total usage can reconcile the completion allowance; partial categories do not refund it. The separate tokenizer allowance is retained. Preflight counts and provider usage in the record remain unchanged.
 
-Forwarded client IP headers are not trusted. The daily caps stay deployment-wide.
+Forwarded client IP headers are not trusted. Until the host provides a verified client identity, the per-minute limit uses one shared bucket for the private access-token principal. This is stricter than a separate allowance for each visitor. Daily caps and concurrent requests stay deployment-wide, including across midnight.
+
+The initial reservation is twice the role-labeled request UTF-8 byte length, plus the injector role-labeled byte length, the requested output cap, and a 131,072-token reasoning allowance. This covers separate allowance estimates for both tokenizer calls and completion. It is a conservative estimate, not a provider-enforced limit on hidden reasoning or an exact billing guarantee. Unknown usage retains the estimate. Reliable completion totals plus the retained tokenizer allowance reconcile against the original UTC day.
+
+Timeouts and unhandled failures retain their concurrency reservation because the provider may still be running. A restart does not clear these holds. After confirming that the provider work has stopped, an operator can release a specific outstanding slot without refunding its unknown token usage:
+
+```sql
+SELECT id, period, reserved_tokens
+FROM workbench_quota_reservation WHERE NOT settled;
+-- Use the reviewed ID below only after confirming the request has stopped:
+SELECT workbench_reconcile('reviewed-reservation-id', NULL);
+```
+
+Configure `DATABASE_URL` through the deployment's secret settings. Run `npm run db:migrate` before enabling Grok; migrations 0002 and 0003 create the allowance functions and enforce concurrency across days. The same database must serve every instance. An absent or unavailable store blocks paid execution.
 
 ## Server configuration
 
@@ -151,7 +164,9 @@ Three hashes are stored on a finalized turn.
 - Prompt SHA-256 of messages-json-v1. That JSON is an array of `{ "role", "content" }` in that key order, with no extra whitespace.
 - Record SHA-256 of the canonical record. Object keys are sorted at every level. The record’s own hash field is left out. The context and prompt hashes stay in.
 
-A budget warning is stored only on turns that have one. Older records are not rewritten to add it.
+The v1 schema permits additive optional `budgetWarning`, `quotaAccounting`, and injector measurement-scope fields. They participate in the hash only when actually present. Legacy records are verified unchanged; no fields are backfilled. New readers validate these optional fields. Older readers may not display them.
+
+A valid completed response with a budget discrepancy stays successful and eligible for history, with a visible warning. Its original preflight counts are not replaced by provider usage. Every next request still passes its own gate.
 
 The fixed vector is `src/lib/workbench/vectors.ts`. Schema `cew-record-v1`.
 
@@ -168,6 +183,8 @@ From [HME](https://github.com/donaldtuttle/HME): the idea of a record identity h
 ## Tests
 
 `src/lib/workbench/workbench.test.ts` covers history assembly, baseline isolation, snapshot freeze, the three hashes, missing usage, offline mock, failed turns that are not replayed, and the Grok gate.
+
+`src/lib/workbench/hardening.test.ts` additionally exercises actual quota SQL in embedded PostgreSQL, cross-day concurrency, storage failures, and rejected requests. This is not a production deployment test.
 
 `src/lib/workbench/guard.test.ts` covers the access token, the shared allowance, packed storage, and credential leakage in client modules.
 

@@ -46,9 +46,10 @@ export function utcPeriod(nowMs: number): string {
   return new Date(nowMs).toISOString().slice(0, 10);
 }
 
-export function conservativeHold(promptBytes: number, maxOutputTokens: number): number {
-  const inputEstimate = Math.max(1, promptBytes);
-  return inputEstimate + maxOutputTokens * 2;
+// This is a conservative allowance estimate, not a provider-enforced billing bound.
+export const REASONING_ALLOWANCE = 131_072;
+export function conservativeHold(promptBytes: number, maxOutputTokens: number, injectorBytes = 0): number {
+  return Math.max(1, promptBytes) * 2 + injectorBytes + maxOutputTokens + REASONING_ALLOWANCE;
 }
 
 export function readQuotaConfig(env: {
@@ -134,7 +135,8 @@ export class MemoryQuotaStore implements QuotaStore {
       if (period.tokens + input.tokens > input.limits.dailyTokenCap) {
         return { ok: false, reason: "The daily token allowance is exhausted." };
       }
-      if (period.concurrency + 1 > input.limits.concurrency) {
+      const running = Object.values(this.backing.periods).reduce((sum, row) => sum + row.concurrency, 0);
+      if (running + 1 > input.limits.concurrency) {
         return { ok: false, reason: "Too many paid requests are already running." };
       }
       this.backing.rates[windowKey] = { count: rate.count + 1 };

@@ -186,3 +186,9 @@ For Grok, the app sends the assembled context, successful conversation history, 
 See [Run](../README.md#run), [Access token](../README.md#access-token), and [Shared allowance](../README.md#shared-allowance) in the README.
 
 Paid Grok on a deployment is not protected until that deployment has `WORKBENCH_ENABLE_GROK=1`, `XAI_API_KEY`, `WORKBENCH_ACCESS_TOKEN`, and `DATABASE_URL`. Setting them in a local preview is a separate step from the hosted app.
+
+## If Grok stays locked after a timeout
+
+The app may keep a request slot reserved when the provider's final outcome is unknown. This prevents an interrupted request from freeing an allowance while it may still be running. The deployment owner can review and release the slot after confirming the work has stopped; see the README's shared-allowance instructions. Your visible response and saved records are not deleted.
+
+Quota reserved/settled tokens are allowance accounting, separate from provider usage. Partial or missing usage does not mean a free request.
