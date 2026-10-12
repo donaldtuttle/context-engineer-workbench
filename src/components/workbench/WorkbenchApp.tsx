@@ -16,6 +16,8 @@ import {
   deleteConversation,
   divergenceReasons,
   localBlockReason,
+  interpretImport,
+  mergeImportedConversations,
   parsePersisted,
   recoverInterrupted,
   startBaseline,
@@ -46,6 +48,8 @@ export function WorkbenchApp() {
     enabled: false,
     reason: "Checking the Grok adapter.",
   });
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [importProblem, setImportProblem] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [composerFocused, setComposerFocused] = useState(false);
   const [exportNote, setExportNote] = useState<string | null>(null);
@@ -107,8 +111,29 @@ export function WorkbenchApp() {
     setState(next);
   }
 
+  function importFile(name: string, text: string) {
+    const result = interpretImport(name, text);
+    if (result.kind === "error") {
+      setImportProblem(true);
+      setImportNote(result.note);
+      return;
+    }
+    if (result.kind === "context") {
+      onDraft(result.name === null ? { text: result.text } : { text: result.text, name: result.name });
+      setImportProblem(false);
+      setImportNote(result.note);
+      return;
+    }
+    commit(mergeImportedConversations(stateRef.current, result.conversations));
+    setPinnedTurnId(null);
+    setImportProblem(false);
+    setImportNote(result.note);
+    setPanel("dialog");
+  }
+
   function onDraft(patch: Partial<Draft>) {
     setConfirmDelete(false);
+    setImportNote(null);
     commit({ ...stateRef.current, draft: { ...stateRef.current.draft, ...patch } });
   }
 
@@ -277,9 +302,11 @@ export function WorkbenchApp() {
             grokEnabled={grok.enabled}
             grokReason={grok.reason}
             confirmDelete={confirmDelete}
+            importNote={importNote}
+            importProblem={importProblem}
             onDraft={onDraft}
             onClear={() => onDraft({ text: "" })}
-            onImport={(file) => void importContext(file, onDraft, setNote)}
+            onImport={(name, text) => importFile(name, text)}
             onExportContext={() => void saveExport(`${state.draft.name || "context"}.json`, { name: state.draft.name, text: state.draft.text })}
             onBaseline={() => {
               void startBaseline(stateRef.current).then((next) => {
@@ -386,26 +413,4 @@ export function WorkbenchApp() {
       ) : null}
     </main>
   );
-}
-
-async function importContext(
-  file: File,
-  onDraft: (patch: Partial<Draft>) => void,
-  setNote: (note: string | null) => void,
-) {
-  const text = await file.text();
-  if (file.name.toLowerCase().endsWith(".json")) {
-    try {
-      const parsed = JSON.parse(text) as { name?: unknown; text?: unknown };
-      if (typeof parsed.text !== "string") throw new Error("missing text");
-      if (typeof parsed.name === "string") onDraft({ text: parsed.text, name: parsed.name });
-      else onDraft({ text: parsed.text });
-      setNote(null);
-    } catch {
-      setNote('JSON import needs { "name", "text" }.');
-    }
-    return;
-  }
-  onDraft({ text });
-  setNote(null);
 }

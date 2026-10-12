@@ -15,6 +15,8 @@ import {
   deleteConversation,
   divergenceReasons,
   localBlockReason,
+  interpretImport,
+  mergeImportedConversations,
   recoverInterrupted,
   startBaseline,
 } from "./session.ts";
@@ -306,6 +308,60 @@ describe("snapshots and hashes", () => {
     assert.equal(turn?.error?.type, "Interrupted");
     assert.ok(turn?.recordSha256);
     assert.equal(replayableHistory(activeConversation(recovered)?.turns ?? [], "mock").length, 0);
+  });
+});
+
+describe("import", () => {
+  const turn = {
+    ...VECTOR_RECORD,
+    id: "turn-import-1",
+    recordSha256: "abc",
+  };
+
+  it("reads injector text, a turn export, and a session export", () => {
+    const context = interpretImport("context.json", JSON.stringify({ name: "Spine", text: "body" }));
+    assert.equal(context.kind, "context");
+    if (context.kind !== "context") return;
+    assert.equal(context.text, "body");
+    assert.equal(context.name, "Spine");
+
+    const plain = interpretImport("notes.txt", "hello");
+    assert.equal(plain.kind, "context");
+
+    const imported = interpretImport("turn-import-1.json", JSON.stringify(turn));
+    assert.equal(imported.kind, "conversations");
+    if (imported.kind !== "conversations") return;
+    assert.equal(imported.conversations[0]?.contextText, "ctx");
+    assert.equal(imported.conversations[0]?.turns.length, 1);
+
+    const emptyTurn = interpretImport("turn.json", JSON.stringify({ ...turn, frozenContextText: "" }));
+    assert.equal(emptyTurn.kind, "conversations");
+    if (emptyTurn.kind !== "conversations") return;
+    assert.match(emptyTurn.note, /empty/);
+
+    const session = interpretImport(
+      "context-engineer-session.json",
+      JSON.stringify({ exportSchema: "cew-session-v1", conversations: [imported.conversations[0]] }),
+    );
+    assert.equal(session.kind, "conversations");
+
+    const rejected = interpretImport("other.json", JSON.stringify({ nope: true }));
+    assert.equal(rejected.kind, "error");
+  });
+
+  it("keeps an existing conversation when the imported id is new", () => {
+    const imported = interpretImport("turn-import-1.json", JSON.stringify(turn));
+    assert.equal(imported.kind, "conversations");
+    if (imported.kind !== "conversations") return;
+    const prior = { ...imported.conversations[0], id: "already", contextName: "kept" };
+    const next = mergeImportedConversations(
+      { ...emptyState(), conversations: [prior], activeId: prior.id },
+      imported.conversations,
+    );
+    assert.equal(next.conversations.length, 2);
+    assert.equal(next.conversations[0]?.contextName, "kept");
+    assert.equal(next.activeId, imported.conversations[0]?.id);
+    assert.equal(next.draft.text, "ctx");
   });
 });
 

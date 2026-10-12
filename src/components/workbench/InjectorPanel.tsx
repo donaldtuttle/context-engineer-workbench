@@ -16,9 +16,11 @@ type Props = {
   grokEnabled: boolean;
   grokReason: string | null;
   confirmDelete: boolean;
+  importNote: string | null;
+  importProblem: boolean;
   onDraft: (patch: Partial<Draft>) => void;
   onClear: () => void;
-  onImport: (file: File) => void;
+  onImport: (name: string, text: string) => void;
   onExportContext: () => void;
   onBaseline: () => void;
   onOpen: (id: string) => void;
@@ -75,17 +77,26 @@ export function InjectorPanel(props: Props) {
           <Eraser className="size-4" aria-hidden="true" />
           Clear
         </button>
-        <label className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-line px-3 text-sm">
+        <label className="relative inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-line px-3 text-sm">
           <Upload className="size-4" aria-hidden="true" />
           Import
           <input
-            className="sr-only"
+            className="absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0 text-base"
             type="file"
-            accept=".txt,.json,text/plain,application/json"
             onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) props.onImport(file);
-              event.target.value = "";
+              const input = event.currentTarget;
+              const file = input.files?.[0];
+              if (!file) return;
+              void file.text().then(
+                (text) => {
+                  input.value = "";
+                  props.onImport(file.name, text);
+                },
+                () => {
+                  input.value = "";
+                  props.onImport(file.name, "");
+                },
+              );
             }}
           />
         </label>
@@ -94,6 +105,9 @@ export function InjectorPanel(props: Props) {
           Export
         </button>
       </div>
+      {props.importNote ? (
+        <p className={`text-sm ${props.importProblem ? "text-warn" : "text-muted"}`}>{props.importNote}</p>
+      ) : null}
 
       <fieldset className="grid gap-2">
         <legend className="text-sm text-muted">Delivery</legend>

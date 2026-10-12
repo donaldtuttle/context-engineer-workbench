@@ -14,9 +14,11 @@ import {
   emptyState,
   type Clock,
   type Conversation,
+  type DeliveryMode,
   type Draft,
   type ExchangeResult,
   type PersistedState,
+  type ProviderId,
   type TurnRecord,
 } from "./types.ts";
 
@@ -350,4 +352,157 @@ export function parsePersisted(raw: string | null): PersistedState {
   } catch {
     return emptyState();
   }
+}
+
+export type ImportResult =
+  | { kind: "context"; text: string; name: string | null; note: string }
+  | { kind: "conversations"; conversations: Conversation[]; note: string }
+  | { kind: "error"; note: string };
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function isProvider(value: unknown): value is ProviderId {
+  return value === "mock" || value === "grok";
+}
+
+function isDelivery(value: unknown): value is DeliveryMode {
+  return value === "SYSTEM_SLOT" || value === "USER_PASTE";
+}
+
+function isTurn(value: unknown): value is TurnRecord {
+  const record = asRecord(value);
+  if (!record || record.schemaVersion !== SCHEMA_VERSION) return false;
+  const settings = asRecord(record.settings);
+  if (!settings || !isProvider(settings.provider) || !isDelivery(settings.deliveryMode) || typeof settings.model !== "string") {
+    return false;
+  }
+  return (
+    typeof record.id === "string" &&
+    typeof record.userPrompt === "string" &&
+    typeof record.frozenContextText === "string" &&
+    typeof record.contextName === "string" &&
+    typeof record.contextSha256 === "string" &&
+    typeof record.createdAt === "string" &&
+    typeof record.executionStatus === "string" &&
+    asRecord(record.preflight) !== null &&
+    asRecord(record.contextBudget) !== null
+  );
+}
+
+function isConversation(value: unknown): value is Conversation {
+  const record = asRecord(value);
+  if (!record || !isDelivery(record.deliveryMode) || !isProvider(record.provider) || typeof record.model !== "string") {
+    return false;
+  }
+  return (
+    typeof record.id === "string" &&
+    typeof record.createdAt === "string" &&
+    typeof record.contextName === "string" &&
+    typeof record.contextText === "string" &&
+    typeof record.contextSha256 === "string" &&
+    Array.isArray(record.turns) &&
+    record.turns.every(isTurn)
+  );
+}
+
+function conversationFromTurn(turn: TurnRecord): Conversation {
+  return {
+    id: `imported-${turn.id}`,
+    createdAt: turn.createdAt,
+    contextName: turn.contextName,
+    contextText: turn.frozenContextText,
+    contextSha256: turn.contextSha256,
+    deliveryMode: turn.settings.deliveryMode,
+    provider: turn.settings.provider,
+    model: turn.settings.model,
+    turns: [turn],
+  };
+}
+
+export function interpretImport(filename: string, text: string): ImportResult {
+  const trimmed = text.replace(/^\uFEFF/, "");
+  if (!trimmed.trim()) return { kind: "error", note: "That file was empty." };
+  const lower = filename.toLowerCase();
+  const looksJson = lower.endsWith(".json") || trimmed.startsWith("{") || trimmed.startsWith("[");
+  if (!looksJson) return { kind: "context", text: trimmed, name: null, note: "Imported the file as injector text." };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return { kind: "error", note: "That file was not valid JSON." };
+  }
+
+  const record = asRecord(parsed);
+  if (record?.exportSchema === "cew-session-v1" && Array.isArray(record.conversations)) {
+    const conversations = record.conversations.filter(isConversation);
+    if (conversations.length === 0) return { kind: "error", note: "The session file had no readable conversations." };
+    const count = conversations.length;
+    return {
+      kind: "conversations",
+      conversations,
+      note: `Imported ${count} conversation${count === 1 ? "" : "s"}.`,
+    };
+  }
+
+  if (Array.isArray(parsed)) {
+    const turns = parsed.filter(isTurn);
+    if (turns.length > 0) {
+      return {
+        kind: "conversations",
+        conversations: turns.map(conversationFromTurn),
+        note: `Imported ${turns.length} turn${turns.length === 1 ? "" : "s"}.`,
+      };
+    }
+  }
+
+  if (isTurn(parsed)) {
+    const note = parsed.frozenContextText
+      ? "Imported 1 turn and its injector text."
+      : "Imported 1 turn. Its injector text was empty.";
+    return { kind: "conversations", conversations: [conversationFromTurn(parsed)], note };
+  }
+
+  if (record && typeof record.text === "string") {
+    return {
+      kind: "context",
+      text: record.text,
+      name: typeof record.name === "string" ? record.name : null,
+      note: "Imported injector text.",
+    };
+  }
+
+  if (record && typeof record.frozenContextText === "string") {
+    return {
+      kind: "context",
+      text: record.frozenContextText,
+      name: typeof record.contextName === "string" ? record.contextName : null,
+      note: record.frozenContextText ? "Imported injector text from the file." : "The file's injector text was empty.",
+    };
+  }
+
+  return { kind: "error", note: "That JSON is not injector text, a turn, or a session export." };
+}
+
+export function mergeImportedConversations(state: PersistedState, incoming: Conversation[]): PersistedState {
+  const byId = new Map(state.conversations.map((item) => [item.id, item]));
+  for (const conversation of incoming) byId.set(conversation.id, conversation);
+  const last = incoming[incoming.length - 1];
+  return {
+    ...state,
+    conversations: [...byId.values()],
+    activeId: last?.id ?? state.activeId,
+    draft: last
+      ? {
+          ...state.draft,
+          name: last.contextName,
+          text: last.contextText,
+          deliveryMode: last.deliveryMode,
+          provider: last.provider,
+          model: last.model,
+        }
+      : state.draft,
+  };
 }
