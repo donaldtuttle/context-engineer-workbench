@@ -40,7 +40,7 @@ Mock returns a structured receipt, not an AI answer. See the [user guide](docs/U
 
 This repository contains the browser prototype, with Grok and Mock providers. Conversations are saved in this browser’s local storage. A Grok request travels through the app’s server to xAI; local conversation storage does not make the hosted app an entirely local system.
 
-Later provider work and the checks still open on the live app are in the [roadmap](docs/ROADMAP.md).
+Later work is in the [roadmap](docs/ROADMAP.md). The next feature is a context-match score. Provider ports come after that.
 
 The draft is not a session. Send freezes the request. The record hash stays Pending until the outcome is final. After that, edits do not rewrite it.
 

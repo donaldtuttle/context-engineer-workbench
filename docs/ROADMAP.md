@@ -76,7 +76,60 @@ Hard edges today:
 
 Stored `assembledMessages` stay in the workbench shape: system, user, assistant. Map that to the vendor's wire format inside the adapter. Do not change the saved transcript to match the wire format.
 
-## Order of work
+## Next: how well the answer matches the context
+
+This is the next feature. Do it before a ChatGPT or Claude adapter.
+
+The question is: how well does this answer match the context that was sent?
+
+It is not a reading of the model's internals. It is a score of checks that were written down before the answer, applied to text a person can see.
+
+The method comes from [advance-reasoning-chain](https://github.com/donaldtuttle/advance-reasoning-chain) at `250c450`. The instruction pack is `skills/advance-reasoning-chain/SKILL.md` (SHA-256 `06ea1687b9c5f77e6bb3257ed23f6dda8ba2b05573b127619e3edba0952e70d0`). That repo is not ARC-CEB-1.0 and not ARC40D-CORE. Do not import those here unless a later task says so.
+
+Borrow the discipline, not the terminal line.
+
+- Define the checks first. Do not pick them after seeing which ones the answer passes.
+- Score observable evidence only.
+- Run the same task under controlled conditions.
+- Keep the scoring rule fixed while you test it.
+- `P × M` in that pack is an ordinal decision score, not a probability. `G ≥ 2` decides whether another step is worth taking. Neither number is the context-match score.
+
+### Checks for one answer
+
+Write these into the task before the reply:
+
+1. Required details. A list declared with the context, not extracted from the answer. Each item is present, contradicted, or missing.
+2. Supporting passages. A claim that the context can support points at a passage in the frozen context. A pointer that does not match the text fails.
+3. Outside the context. A claim the context does not contain is flagged. Silence is not support.
+
+The score is how those checks came out. Show the checks. Do not show only a single unlabeled number.
+
+### Controlled test
+
+The app can already open a baseline conversation with empty context. Use that.
+
+- Same prompt, once with the context and once without it.
+- A fixture whose required details are in the context, and a fixture whose answer adds a detail that is not.
+- Count how often the checks mark the supported answer as supported and the unsupported answer as not.
+- Report that count. A high score on both, or a high score on the empty-context run, means the check is not yet useful.
+
+If the score cannot separate those cases, say so. Do not tune the checks after looking at the result and then treat that run as evidence.
+
+### Where it sits in the app
+
+Diagnostics, on a finished turn. It does not rewrite the answer and it does not choose the next prompt.
+
+The turn hash is SHA-256 of every field except `recordSha256`. Putting the score inside the turn changes the hash. Keep the evaluation beside the turn, and cite `recordSha256`. Re-running the checks must not rewrite the exchange.
+
+The first version does not call a model. A later judge that calls a model is a paid request. It uses the same quota gate, and it does not run during a status check.
+
+Mock must be able to produce both a supported and an unsupported fixture. Do not spend API credits to build the test.
+
+### Pickup
+
+Start from `main`. Read this file. Implement the checks and the with-context / without-context comparison. Leave provider ports until this score can fail in public.
+
+## Order of work after that
 
 Do these in order. Stop after each one and keep the old tests green.
 
