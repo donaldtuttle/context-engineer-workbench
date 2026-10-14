@@ -115,6 +115,12 @@ The app can already open a baseline conversation with empty context. Use that.
 
 If the score cannot separate those cases, say so. Do not tune the checks after looking at the result and then treat that run as evidence.
 
+### External scorer
+
+That comparison can be scored outside the app. [grounding-check](https://github.com/donaldtuttle/grounding-check) at `f152d601b099e25c06212d35add03b631d1c2202` locks the checks before any output, then scores Export session or Export turn against a Baseline arm. It checks the record hashes. It does not write a score into the turn.
+
+It is not this feature. Diagnostics still does not show a context-match score. Do not feed it Export saved data (`cew.sessions.v2`). Do not bump `cew-record-v1` for it.
+
 ### Where it sits in the app
 
 Diagnostics, on a finished turn. It does not rewrite the answer and it does not choose the next prompt.
