@@ -20,7 +20,7 @@ Use the workbench to:
 
 - Ask questions about your own notes, specifications, or instructions.
 - Reuse the same background throughout a conversation.
-- Try a fresh conversation without the background using **Baseline**.
+- Try a fresh conversation without the background using **Start without context**.
 - Inspect how much input was counted and what usage the provider reported.
 - Export the context or conversation for later review.
 
@@ -32,7 +32,7 @@ The app preserves the submitted material and records the exchange. It does not g
 2. In **Injector**, paste your background into **Context** and optionally give it a name.
 3. Leave **System slot** selected. Choose **Grok** for an AI response when the server reports it is available, or **Mock** to try the record workflow without a model call.
 4. In **Dialog**, type a question and press **Send**.
-5. Open **Diagnostics** to inspect that turn, then use **Export turn** or **Export session** to save a copy.
+5. Open **Diagnostics** to inspect that turn, then use **Export this turn** or **Export all conversations** to save a copy.
 
 Mock returns a structured receipt, not an AI answer. See the [user guide](docs/USER_GUIDE.md) for a pasteable example, baseline comparisons, import/export, and troubleshooting.
 
@@ -68,9 +68,9 @@ The second count already includes the injector. Do not add the two counts togeth
 
 Empty context records an injector count of zero, then counts the assembled request once.
 
-Open Diagnostics to inspect that turn, or an earlier one. Export the turn or the whole session. Delete removes one saved conversation from this browser.
+Open Diagnostics to inspect that turn, or an earlier one. Use Export this turn, or Export all conversations. Delete conversation removes one saved conversation from this browser.
 
-Baseline starts a new conversation with empty context and no inherited messages. Older conversations stay in the list.
+Start without context starts a new conversation with empty context and no inherited messages. Older conversations stay in the list.
 
 A new conversation also starts when context text, delivery, provider, or model differs from the active one. Changing only the name does not.
 
@@ -134,6 +134,8 @@ Configure `DATABASE_URL` through the deployment's secret settings. Run `npm run 
 | --- | --- |
 | WORKBENCH_ENABLE_GROK | Set to `1` to allow the adapter |
 | XAI_API_KEY | Server-side xAI credential. It is not shown in the page, the record, or an export |
+| WORKBENCH_ENABLE_CHATGPT | Set to `1` to allow the ChatGPT adapter |
+| OPENAI_API_KEY | Server-side OpenAI credential. It is not the Grok key and it is not shown in the page |
 | WORKBENCH_ACCESS_TOKEN | Server-side access token. It is not an API key |
 | DATABASE_URL | Postgres connection for the shared allowance |
 | WORKBENCH_GROK_CONTEXT_FLOOR | Optional. It can lower a pinned window. It cannot raise one |
@@ -150,7 +152,7 @@ Older saves under `cew.sessions.v1` are still read. After a checked copy is writ
 
 If saved data cannot be read, the app leaves those bytes in place, shows a warning on every panel, and can export them. It does not overwrite them until you confirm Reset saved data.
 
-If a later save fails, the page keeps the conversations in memory and shows a warning. Export the session before you close the page. The warning clears after a save succeeds.
+If a later save fails, the page keeps the conversations in memory and shows a warning. Export all conversations before you close the page. The warning clears after a save succeeds.
 
 Choosing Grok transmits the assembled messages to xAI at `https://api.x.ai`. The request sets `store` to false, sends no tools, and does not write encrypted reasoning content into the local record.
 

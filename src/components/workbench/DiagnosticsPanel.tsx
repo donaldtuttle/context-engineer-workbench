@@ -36,7 +36,8 @@ export function DiagnosticsPanel(props: Props) {
       <header className="grid gap-1">
         <p className="text-xs text-muted">Panel 3</p>
         <h2 className="text-lg font-medium">Diagnostics</h2>
-        <p className="text-sm text-muted">Latest turn, unless you select an earlier frozen snapshot.</p>
+        <p className="text-sm text-muted">Inspect records</p>
+        <p className="text-sm text-muted">Review the context, messages, settings, and result recorded for one exchange. Select Latest or an earlier turn.</p>
       </header>
 
       {props.conversation && props.conversation.turns.length > 0 ? (
@@ -57,7 +58,7 @@ export function DiagnosticsPanel(props: Props) {
           ))}
         </div>
       ) : (
-        <p className="text-sm text-muted">No turn yet.</p>
+        <p className="text-sm text-muted">Send a question to create a turn record. Mock lets you explore this panel without a model call.</p>
       )}
 
       {turn ? (
@@ -70,9 +71,12 @@ export function DiagnosticsPanel(props: Props) {
           <p className="text-sm text-muted">
             {turn.recordSha256
               ? matches
-                ? "Record hash matches this serialization."
+                ? "A matching record fingerprint confirms consistency with that fingerprint, not AI accuracy or instruction following."
                 : "Record hash does not match. The stored turn was not rewritten."
-              : "The record hash stays pending until the outcome is finalized."}
+              : "The record fingerprint will be finalized when the request outcome is recorded."}
+          </p>
+          <p className="text-sm text-muted">
+            Status shows whether the request completed, is still waiting, or ended with a problem. Success does not mean the answer is correct. Current status: {turn.executionStatus}.
           </p>
 
           <Readout turn={turn} />
@@ -84,11 +88,14 @@ export function DiagnosticsPanel(props: Props) {
           <Meter turn={turn} />
 
           <p className="text-sm text-muted">
-            Hashes identify this app’s records. They do not verify that the model followed the context.
+            Fingerprints identify the saved content. A matching record fingerprint confirms consistency with that fingerprint, not AI accuracy or instruction following.
           </p>
 
           <details className="rounded-lg border border-line p-3">
-            <summary className="cursor-pointer text-sm">Raw request</summary>
+            <summary className="cursor-pointer text-sm">Recorded request details</summary>
+            <p className="mt-3 text-sm text-muted">
+              Saved context, message list, settings, and budget information. A prepared request record does not, by itself, prove provider processing.
+            </p>
             <pre className="mt-3 overflow-x-auto font-mono text-xs whitespace-pre-wrap break-words text-muted">
               {JSON.stringify(
                 {
@@ -110,7 +117,7 @@ export function DiagnosticsPanel(props: Props) {
             onClick={props.onExport}
           >
             <Download className="size-4" aria-hidden="true" />
-            Export turn
+            Export this turn
           </button>
         </>
       ) : null}
@@ -169,10 +176,10 @@ function Readout(props: { turn: TurnRecord }) {
       ))}
       <p className="text-sm text-muted">{turn.preflight.measurementScope}</p>
       <p className="text-sm text-muted">
-        Max output tokens limit the visible reply. Status length means that cap was hit. Reasoning tokens are extra. Provider input can be higher than the counted input because the chat template is not in the tokenize count.
+        Context tokens are already part of the full input count. Do not add them again. Provider usage is reported separately and may differ. Not counted or not reported means unavailable, not zero. Max output tokens limit the visible reply. Status length means that cap was hit. Reasoning tokens are extra.
       </p>
       <p className="text-sm text-muted">
-        Injection tokens are the injector text alone. They are checked against the input budget before the rest of the request. The counted input is the whole request, including that injection, and that total is checked again before the reply is requested.
+        These quota figures track the deployment's request allowance. They are not a provider bill or dollar amount.
       </p>
     </div>
   );
@@ -182,18 +189,21 @@ function Meter(props: { turn: TurnRecord }) {
   const counted = props.turn.contextBudget.countedInputTokens;
   const budget = props.turn.contextBudget.budget;
   if (counted === null || budget === null || budget <= 0) {
-    return <p className="text-sm text-muted">No token-budget chart for this turn. The provider did not report a count.</p>;
+    return <p className="text-sm text-muted">No input-budget chart is available because this turn lacks a usable input count or budget.</p>;
   }
   const ratio = Math.max(0, Math.min(counted / budget, 1));
   const width = counted > 0 ? Math.max(ratio * 100, 1.5) : 0;
   return (
     <div className="grid gap-2">
-      <p className="text-xs text-muted">Counted input, including the injection, against the input budget</p>
+      <p className="text-xs text-muted">Input used / input allowance</p>
       <div className="h-3 overflow-hidden rounded-sm bg-raised" aria-hidden="true">
         <div className="h-full bg-trace" style={{ width: `${width}%` }} />
       </div>
       <p className="font-mono text-xs text-muted">
         {counted.toLocaleString()} / {budget.toLocaleString()}
+      </p>
+      <p className="text-xs text-subtle">
+        Shows counted input, including context and history, against the configured allowance. It is not an answer-quality or confidence score.
       </p>
     </div>
   );

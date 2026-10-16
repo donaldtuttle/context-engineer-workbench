@@ -523,7 +523,8 @@ describe("packed storage", () => {
     const state = await succeed(withDraft({ text: "keep" }), "hello");
     const failed = saveStored(throwing, state);
     assert.equal(failed.ok, false);
-    assert.match(failed.ok ? "" : failed.message, /not been saved/);
+    assert.match(failed.ok ? "" : failed.message, /only on this page/);
+    assert.match(failed.ok ? "" : failed.message, /Export all conversations/);
   });
 
   it("writes the latest state after a delete or edit during persistence", async () => {
@@ -560,10 +561,12 @@ describe("client credential surface", () => {
       "src/components/workbench/DialogPanel.tsx",
       "src/components/workbench/DiagnosticsPanel.tsx",
       "src/lib/workbench/grok-api.ts",
+      "src/lib/workbench/chatgpt-api.ts",
     ];
     for (const file of files) {
       const text = readFileSync(file, "utf8");
       assert.equal(text.includes("process.env.XAI_API_KEY"), false, file);
+      assert.equal(text.includes("process.env.OPENAI_API_KEY"), false, file);
       assert.equal(text.includes("process.env.WORKBENCH_ACCESS_TOKEN"), false, file);
       assert.equal(text.includes(TOKEN), false, file);
     }

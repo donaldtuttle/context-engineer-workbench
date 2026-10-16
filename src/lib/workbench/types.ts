@@ -13,7 +13,7 @@ export const MEASUREMENT_SCOPE =
   "Local counts are UTF-8 bytes of the context text and of messages-json-v1. A Grok token count, when present, is xAI tokenize on role-labeled message text and excludes chat-template overhead. These counts do not verify model compliance.";
 
 export type DeliveryMode = "SYSTEM_SLOT" | "USER_PASTE";
-export type ProviderId = "mock" | "grok";
+export type ProviderId = "mock" | "grok" | "chatgpt";
 export type ExecutionStatus = "pending" | "success" | "error" | "timeout" | "blocked" | "incomplete";
 
 export type ChatMessage = {
@@ -90,6 +90,14 @@ export type TransportRecord =
       storeMessages: false;
       tools: false;
       encryptedContentStored: false;
+    }
+  | {
+      kind: "openai-https";
+      origin: "https://api.openai.com";
+      chatPath: "/v1/chat/completions";
+      retries: 0;
+      storeMessages: false;
+      tools: false;
     };
 
 export type TurnRecord = {

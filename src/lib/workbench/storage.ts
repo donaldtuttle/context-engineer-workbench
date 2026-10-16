@@ -74,7 +74,7 @@ export function saveStored(storage: StorageLike, state: PersistedState): { ok: t
     unpackState(JSON.parse(written) as PackedEnvelope);
     return { ok: true };
   } catch {
-    return { ok: false, message: "Recent changes have not been saved. They are still on this page. Export the session before you close it." };
+    return { ok: false, message: "The latest changes may exist only on this page. Export all conversations before closing or reloading." };
   }
 }
 

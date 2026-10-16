@@ -7,6 +7,7 @@ import { DialogPanel } from "@/components/workbench/DialogPanel";
 import { InjectorPanel } from "@/components/workbench/InjectorPanel";
 import { downloadJson, downloadText, shareExport, type ExportOutcome } from "@/lib/workbench/download";
 import { grokAvailability, runGrokTurn } from "@/lib/workbench/grok-api";
+import { chatgptAvailability, runChatGptTurn } from "@/lib/workbench/chatgpt-api";
 import { runMockExchange } from "@/lib/workbench/mock";
 import {
   activeConversation,
@@ -58,6 +59,10 @@ export function WorkbenchApp() {
     enabled: false,
     reason: "Checking the Grok adapter.",
   });
+  const [chatgpt, setChatgpt] = useState<{ enabled: boolean; reason: string | null }>({
+    enabled: false,
+    reason: "Checking the ChatGPT adapter.",
+  });
   const [importNote, setImportNote] = useState<string | null>(null);
   const [importProblem, setImportProblem] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -100,7 +105,7 @@ export function WorkbenchApp() {
         persistAllowed.current = false;
         setStorageBlocked(true);
         setRawSaved({ name: `${loaded.key}.raw.json`, raw: loaded.raw });
-        setStorageNote(`${loaded.message} The original saved bytes were left in place. Export them, or reset saved data before anything new is stored.`);
+        setStorageNote(`${loaded.message} Export the original saved data before confirming a reset. Resetting can replace saved data the app could not read.`);
         setHydrated(true);
         return;
       }
@@ -112,7 +117,7 @@ export function WorkbenchApp() {
         if (!migrated.ok) {
           persistAllowed.current = false;
           setStorageBlocked(true);
-          setStorageNote(`${migrated.message} The older copy is still in this browser. Export the session before you reset saved data.`);
+          setStorageNote(`${migrated.message} The older copy is still in this browser. Export all conversations before you reset saved data.`);
         } else {
           persistAllowed.current = true;
         }
@@ -153,6 +158,20 @@ export function WorkbenchApp() {
       })
       .catch(() => {
         if (!cancel) setGrok({ enabled: false, reason: "Requires WORKBENCH_ENABLE_GROK=1 and server-side XAI_API_KEY" });
+      });
+    return () => {
+      cancel = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancel = false;
+    void chatgptAvailability()
+      .then((status) => {
+        if (!cancel) setChatgpt(status);
+      })
+      .catch(() => {
+        if (!cancel) setChatgpt({ enabled: false, reason: "Requires WORKBENCH_ENABLE_CHATGPT=1 and server-side OPENAI_API_KEY" });
       });
     return () => {
       cancel = true;
@@ -251,6 +270,26 @@ export function WorkbenchApp() {
           seed: turn.settings.seed,
           blockedReason: null,
         });
+      } else if (turn.settings.provider === "chatgpt") {
+        result = await runChatGptTurn({
+          data: {
+            provider: "chatgpt",
+            model: turn.settings.model,
+            messages: turn.assembledMessages,
+            timeoutSeconds: turn.settings.timeoutSeconds,
+            maxOutputTokens: turn.settings.maxOutputTokens,
+            temperature: turn.settings.temperature,
+            topP: turn.settings.topP,
+            seed: turn.settings.seed,
+            contextText: turn.frozenContextText,
+            contextSha256: turn.contextSha256,
+            promptSha256: turn.promptSha256,
+            accessToken,
+            ...(turn.frozenContextText.length > 0
+              ? { contextRole: turn.settings.deliveryMode === "SYSTEM_SLOT" ? "system" : "user" }
+              : {}),
+          },
+        });
       } else {
         result = await runGrokTurn({
           data: {
@@ -291,9 +330,24 @@ export function WorkbenchApp() {
     const shell = shellRef.current;
     const frame = window.visualViewport;
     if (!shell || !frame) return;
+    const reveal = () => {
+      const el = document.activeElement;
+      if (!(el instanceof HTMLElement)) return;
+      if (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA" && el.tagName !== "SELECT") return;
+      const scroller = el.closest(".panel-scroll");
+      if (!(scroller instanceof HTMLElement)) return;
+      const box = el.getBoundingClientRect();
+      const pane = scroller.getBoundingClientRect();
+      const limit = frame.height - 8;
+      if (box.height >= limit - pane.top) scroller.scrollTop += box.top - pane.top;
+      else if (box.bottom > limit) scroller.scrollTop += box.bottom - limit;
+      else if (box.top < pane.top) scroller.scrollTop -= pane.top - box.top;
+    };
     const place = () => {
-      shell.style.top = `${frame.offsetTop}px`;
+      shell.style.top = "0px";
       shell.style.height = `${frame.height}px`;
+      if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0);
+      requestAnimationFrame(reveal);
     };
     place();
     frame.addEventListener("resize", place);
@@ -303,6 +357,27 @@ export function WorkbenchApp() {
       frame.removeEventListener("resize", place);
       frame.removeEventListener("scroll", place);
       window.removeEventListener("orientationchange", place);
+    };
+  }, []);
+
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) return;
+    const isField = (node: EventTarget | null) =>
+      node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement;
+    const onFocusIn = (event: FocusEvent) => {
+      if (isField(event.target)) setComposerFocused(true);
+    };
+    const onFocusOut = () => {
+      window.setTimeout(() => {
+        if (!isField(document.activeElement)) setComposerFocused(false);
+      }, 0);
+    };
+    shell.addEventListener("focusin", onFocusIn);
+    shell.addEventListener("focusout", onFocusOut);
+    return () => {
+      shell.removeEventListener("focusin", onFocusIn);
+      shell.removeEventListener("focusout", onFocusOut);
     };
   }, []);
 
@@ -341,17 +416,40 @@ export function WorkbenchApp() {
     setExportNote(result.message);
   }
 
-  const panelClass = (id: PanelId, scroll: boolean) =>
-    `${panel === id ? "flex" : "hidden"} h-full min-h-0 flex-col ${scroll ? "overflow-y-auto" : "overflow-hidden"} border-line lg:flex lg:border-r lg:last:border-r-0`;
+  const panelClass = (id: PanelId) =>
+    [
+      panel === id ? "block" : "hidden",
+      "absolute inset-0 min-h-0 overflow-y-scroll panel-scroll border-line lg:static lg:block lg:h-full lg:border-r lg:last:border-r-0",
+    ].join(" ");
 
   return (
     <main ref={shellRef} className="fixed inset-x-0 top-0 flex h-dvh flex-col overflow-hidden bg-bg text-fg">
-      <header className={`flex items-center justify-between gap-3 border-b border-line px-4 py-3 ${composerFocused ? "max-lg:hidden" : ""}`}>
-        <div className="grid gap-0.5">
-          <p className="text-xs text-muted">Local records</p>
-          <h1 className="text-lg font-medium">Context Engineer</h1>
+      <header className={`grid gap-2 border-b border-line px-4 py-3 ${composerFocused ? "max-lg:hidden" : ""}`}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="grid min-w-0 gap-0.5">
+            <h1 className="text-base font-medium leading-snug">Context Engineer Workbench</h1>
+            <p className="text-sm text-muted">Add background. Ask questions. Inspect the record.</p>
+            <p className="text-xs text-subtle">Conversations are saved in this browser.</p>
+          </div>
         </div>
-        <p className="text-xs text-subtle">v1</p>
+        <nav className="flex flex-wrap gap-x-4 gap-y-1" aria-label="Help">
+          <a
+            className="inline-flex min-h-11 items-center text-sm underline"
+            href="https://github.com/donaldtuttle/context-engineer-workbench/blob/main/docs/USER_GUIDE.md"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            User guide
+          </a>
+          <a
+            className="inline-flex min-h-11 items-center text-sm underline"
+            href="https://github.com/donaldtuttle/context-engineer-workbench"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            View source on GitHub
+          </a>
+        </nav>
       </header>
       {exportNote ? (
         <p className="border-b border-line px-4 py-2 text-sm text-muted" role="status">
@@ -373,7 +471,7 @@ export function WorkbenchApp() {
                 })
               }
             >
-              Export session
+              Export all conversations
             </button>
             {rawSaved ? (
               <button type="button" className="min-h-11 rounded-md border border-line px-3 text-sm" onClick={() => void downloadText(rawSaved.name, rawSaved.raw).then(applyExport)}>
@@ -388,27 +486,29 @@ export function WorkbenchApp() {
           </div>
         </div>
       ) : null}
-      <nav className="grid grid-cols-3 border-b border-line lg:hidden" aria-label="Panels">
+      <nav className={`grid grid-cols-3 border-b border-line lg:hidden ${composerFocused ? "hidden" : ""}`} aria-label="Panels">
         {(
           [
-            ["injector", "Injector"],
-            ["dialog", "Dialog"],
-            ["diagnostics", "Diagnostics"],
+            ["injector", "Injector", "Add context"],
+            ["dialog", "Dialog", "Ask questions"],
+            ["diagnostics", "Diagnostics", "Inspect records"],
           ] as const
-        ).map(([id, label]) => (
+        ).map(([id, label, subtitle]) => (
           <button
             key={id}
             type="button"
             aria-pressed={panel === id}
-            className={`min-h-11 text-sm ${panel === id ? "bg-surface text-fg" : "text-muted"}`}
+            aria-label={`${label}: ${subtitle}`}
+            className={`min-h-11 px-1 py-1 text-sm leading-tight ${panel === id ? "bg-surface text-fg" : "text-muted"}`}
             onClick={() => setPanel(id)}
           >
-            {label}
+            <span className="block">{label}</span>
+            <span className="block text-[10px] font-normal">{subtitle}</span>
           </button>
         ))}
       </nav>
-      <div inert={!hydrated} className="grid min-h-0 flex-1 lg:grid-cols-3">
-        <section className={panelClass("injector", true)} aria-label="Injector">
+      <div inert={!hydrated} className="relative min-h-0 flex-1 overflow-hidden lg:grid lg:grid-cols-3 lg:grid-rows-1">
+        <section className={panelClass("injector")} aria-label="Injector: Add context">
           <InjectorPanel
             draft={state.draft}
             contextHash={contextHash}
@@ -416,12 +516,15 @@ export function WorkbenchApp() {
             activeId={state.activeId}
             grokEnabled={grok.enabled}
             grokReason={grok.reason}
+            chatgptEnabled={chatgpt.enabled}
+            chatgptReason={chatgpt.reason}
             accessToken={accessToken}
             onAccessToken={setAccessToken}
             onClearAccessToken={() => setAccessToken("")}
             confirmDelete={confirmDelete}
             importNote={importNote}
             importProblem={importProblem}
+            changeReasons={divergenceReasons(conversation, state.draft).filter((reason) => reason !== "No active conversation")}
             onDraft={onDraft}
             onClear={() => onDraft({ text: "" })}
             onImport={(name, text) => importFile(name, text)}
@@ -453,7 +556,7 @@ export function WorkbenchApp() {
             }
           />
         </section>
-        <section className={panelClass("dialog", false)} aria-label="Dialog">
+        <section className={panelClass("dialog")} aria-label="Dialog: Ask questions">
           <DialogPanel
             conversation={conversation}
             reasons={divergenceReasons(conversation, state.draft)}
@@ -465,7 +568,7 @@ export function WorkbenchApp() {
             onComposerFocus={setComposerFocused}
           />
         </section>
-        <section className={panelClass("diagnostics", true)} aria-label="Diagnostics">
+        <section className={panelClass("diagnostics")} aria-label="Diagnostics: Inspect records">
           <DiagnosticsPanel
             conversation={conversation}
             turn={selected}

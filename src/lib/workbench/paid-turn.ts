@@ -6,15 +6,19 @@
 import { accessConfigError, accessTokensMatch, ACCESS_TOKEN_MAX_CHARS } from "./access.ts";
 import { promptByteLength, promptSha256 } from "./messages.ts";
 import { runGrokExchange, type GrokEnv } from "./grok-adapter.ts";
+import { runChatGptExchange } from "./chatgpt-adapter.ts";
 import { conservativeHold, utcPeriod, QUOTA_HOLD_GRACE_MS, type QuotaLimits, type QuotaStore } from "./limits.ts";
 import { sha256Text, utf8ByteLength } from "./hash.ts";
 import { LOCAL_BYTE_CEILING, type ChatMessage, type ExchangeResult, type Usage } from "./types.ts";
 import { GROK_WINDOWS } from "./windows.ts";
+import { CHATGPT_WINDOWS } from "./openai-windows.ts";
 
 export type PaidEnv = GrokEnv & {
   accessToken?: string;
   quota?: { ok: true; limits: QuotaLimits } | { ok: false; reason: string };
   sharedStore: boolean;
+  openaiFlag?: string;
+  openaiKey?: string;
 };
 
 export type PaidRequest = {
@@ -98,13 +102,17 @@ function isRole(value: unknown): value is ChatMessage["role"] {
   return value === "system" || value === "user" || value === "assistant";
 }
 
-export async function parsePaidCall(data: unknown): Promise<{ input: Parameters<typeof runGrokExchange>[0]; accessToken: string } | { error: string }> {
+export async function parsePaidCall(
+  data: unknown,
+  windows: Record<string, number> = GROK_WINDOWS,
+  modelError = "That Grok model is not in the pinned window table.",
+): Promise<{ input: Parameters<typeof runGrokExchange>[0]; accessToken: string } | { error: string }> {
   if (!data || typeof data !== "object" || Array.isArray(data)) return { error: "Invalid Grok request" };
   const body = data as Record<string, unknown>;
   const accessToken = typeof body.accessToken === "string" ? body.accessToken : "";
   if (accessToken.length > ACCESS_TOKEN_MAX_CHARS) return { error: "The access token is too long." };
-  if (typeof body.model !== "string" || !Object.hasOwn(GROK_WINDOWS, body.model)) {
-    return { error: "That Grok model is not in the pinned window table." };
+  if (typeof body.model !== "string" || !Object.hasOwn(windows, body.model)) {
+    return { error: modelError };
   }
   const model = body.model;
   if (!Array.isArray(body.messages) || body.messages.length < 1 || body.messages.length > 200) {
@@ -191,6 +199,14 @@ export async function parsePaidCall(data: unknown): Promise<{ input: Parameters<
   };
 }
 
+function readVendor(data: unknown): "grok" | "chatgpt" | "rejected" {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return "grok";
+  const provider = (data as { provider?: unknown }).provider;
+  if (provider === undefined || provider === "grok") return "grok";
+  if (provider === "chatgpt") return "chatgpt";
+  return "rejected";
+}
+
 export async function executePaidTurn(args: {
   data: unknown;
   env: PaidEnv;
@@ -201,8 +217,15 @@ export async function executePaidTurn(args: {
   nowMs?: number;
 }): Promise<ExchangeResult> {
   if (!sameSite(args.request)) return blocked("The request origin does not match this deployment.");
-  if (args.env.enableFlag !== "1" || !args.env.apiKey) {
-    return blocked("Requires WORKBENCH_ENABLE_GROK=1 and server-side XAI_API_KEY");
+  const vendor = readVendor(args.data);
+  if (vendor === "rejected") return blocked("That provider is not available.");
+  const paidName = vendor === "chatgpt" ? "ChatGPT" : "Grok";
+  if (vendor === "grok") {
+    if (args.env.enableFlag !== "1" || !args.env.apiKey) {
+      return blocked("Requires WORKBENCH_ENABLE_GROK=1 and server-side XAI_API_KEY");
+    }
+  } else if (args.env.openaiFlag !== "1" || !args.env.openaiKey) {
+    return blocked("Requires WORKBENCH_ENABLE_CHATGPT=1 and server-side OPENAI_API_KEY");
   }
   const configured = args.env.accessToken ?? "";
   const configError = accessConfigError(configured);
@@ -212,10 +235,13 @@ export async function executePaidTurn(args: {
   if (!accessTokensMatch(configured, supplied.token)) {
     return blocked("The access token was not accepted.");
   }
-  const parsed = await parsePaidCall(args.data);
+  const parsed =
+    vendor === "chatgpt"
+      ? await parsePaidCall(args.data, CHATGPT_WINDOWS, "That ChatGPT model is not in the pinned window table.")
+      : await parsePaidCall(args.data);
   if ("error" in parsed) return validation(parsed.error);
   if (!args.env.sharedStore || !args.store) {
-    return blocked("Paid Grok is locked until a shared quota store is configured. An in-memory counter is not a deployment limit.");
+    return blocked(`Paid ${paidName} is locked until a shared quota store is configured. An in-memory counter is not a deployment limit.`);
   }
   if (!args.env.quota?.ok) {
     return blocked(args.env.quota?.reason ?? "The quota configuration is invalid.");
@@ -224,7 +250,6 @@ export async function executePaidTurn(args: {
   const period = utcPeriod(nowMs);
   const messageBytes = utf8ByteLength(parsed.input.messages.map((m) => `${m.role}\n${m.content}`).join("\n"));
   const injectorBytes = parsed.input.contextText ? utf8ByteLength(`${parsed.input.contextRole}\n${parsed.input.contextText}`) : 0;
-  const tokenizerAllowance = messageBytes + injectorBytes;
   const hold = conservativeHold(messageBytes, parsed.input.maxOutputTokens, injectorBytes);
   let reservation;
   try {
@@ -237,7 +262,7 @@ export async function executePaidTurn(args: {
       tokens: hold,
     });
   } catch {
-    return blocked("The shared limiter is unavailable. Paid Grok was not called.");
+    return blocked("The shared limiter is unavailable. Paid " + paidName + " was not called.");
   }
   if (!reservation.ok) return blocked(reservation.reason);
   let result: ExchangeResult;
@@ -248,9 +273,17 @@ export async function executePaidTurn(args: {
     if (String(url).endsWith("/chat/completions")) completionAttempted = true;
     return args.fetchImpl(url, init);
   };
+  const tokenizerAllowance = vendor === "chatgpt" ? 0 : messageBytes + injectorBytes;
   const earlyCharge = () => (providerCalls === 0 ? 0 : tokenizerAllowance);
   try {
-    result = await runGrokExchange(parsed.input, args.env, trackedFetch);
+    result =
+      vendor === "chatgpt"
+        ? await runChatGptExchange(
+            parsed.input,
+            { openaiFlag: args.env.openaiFlag, openaiKey: args.env.openaiKey },
+            trackedFetch,
+          )
+        : await runGrokExchange(parsed.input, args.env, trackedFetch);
   } catch {
     if (!completionAttempted) {
       try {

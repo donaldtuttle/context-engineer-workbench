@@ -1,194 +1,234 @@
-# User guide
+# Context Engineer Workbench: User Guide
 
-[Open Context Engineer Workbench](https://context-engineer-workbench.grok.me) · [Back to the README](../README.md)
+[Open the workbench](https://context-engineer-workbench.grok.me) |
+[View source on GitHub](https://github.com/donaldtuttle/context-engineer-workbench)
 
-Context Engineer Workbench helps you give an AI the background for a task, ask follow-up questions, and inspect a saved record of what was submitted and returned.
+## What does this app do?
+
+Context Engineer Workbench lets you give AI background information, ask questions about it, and inspect a record of each exchange.
+
+Your **context** is the information you supply: project notes, specifications, writing instructions, research procedures, or other reference text.
+
+Your **prompt** is the question or task you send next.
+
+The workbench includes your context with each request. You do not need to paste it into every message. It also records the submitted messages, settings, response, and available usage information.
+
+This gives you a way to review what the AI was given, not a guarantee that its answer is correct.
 
 ## Find your way around
 
-On a wide screen, the app has three panels. On a phone or smaller screen, switch between the tabs at the top.
-
 | Panel | What you do there |
 | --- | --- |
-| **Injector** | Paste your background, select a provider, adjust settings, and manage saved conversations. |
-| **Dialog** | Ask questions and read responses. |
-| **Diagnostics** | Inspect the selected turn’s frozen context, request settings, counts, hashes, and result. |
+| **Injector: Add context** | Enter background information, choose Mock, Grok, or ChatGPT, and manage saved conversations. |
+| **Dialog: Ask questions** | Send a question and read the response. |
+| **Diagnostics: Inspect records** | Review what was prepared for a particular exchange, its outcome, and available token counts. |
 
-“Injector” means the place where you supply background text. You do not need to write code or use a special format.
+On a wide screen, the panels appear together. On a smaller screen, use the tabs.
 
-## Your first conversation
+A **turn** is one submitted question and its recorded outcome, including an error or incomplete reply.
 
-### 1. Add some background
+## Try your first conversation
 
-In **Injector**, enter an optional **Name**, such as “Studio lamp brief,” and paste this into **Context**:
+### 1. Add a brief
+
+Open **Injector**. Give the context an optional name, such as **Studio lamp brief**, and paste this fictional example into **Context**:
 
 ```text
 Project: Studio lamp
-The shade is matte blue.
-The base is brushed aluminum.
-The lamp is 420 mm tall.
-The power cable is 1.8 m long.
-The product description is for a general audience.
-Keep measurements and units exactly as supplied.
+Height: 420 mm
+Shade: matte blue
+Base: brushed aluminum
+Cable length: 1.8 m
+
+Use only the specifications above when describing this product.
+Keep measurements and units unchanged.
 If a specification is missing, say it was not provided.
 ```
 
-The SHA-256 value below the box is a fingerprint of the text. It changes when the text changes. You can ignore the full value during ordinary use.
+### 2. Choose a mode
 
-### 2. Choose how to run it
+Leave **System slot** selected for this example.
 
-Leave **System slot** selected for this walkthrough.
+Choose **Grok** for an AI response when this deployment supports it. Select a supported model from the model suggestions and enter the app access token supplied by the deployment owner.
 
-Select **Grok** if the app says the Grok adapter is available on the server. The provider must be selected explicitly; availability does not switch it for you. Use a supported ID from the **Grok model ID** suggestions. The suggestions are grok-4.7, grok-4.6, and grok-4.5.
+Choose **ChatGPT** the same way when this deployment has its own ChatGPT key. That key is not the Grok key, and it is not typed into the page.
 
-When Grok is selected, the **Access token** field appears. Type the deployment token your operator gave you. It is not an xAI API key. It stays in this page’s memory until you press **Clear access token** or reload the page. It is not saved with the conversation.
+The access token is not an xAI or OpenAI API key.
 
-Select **Mock** to try the workflow without an AI call and without an access token. Mock produces a JSON receipt containing request information. It does not interpret the lamp brief or answer your question.
+Choose **Mock** to explore the workflow without a model call. Mock returns a technical receipt showing request information. It does not answer questions about your brief.
+
+Leave **Request settings** at their defaults for the walkthrough. The page reporting Grok availability does not select it for you.
 
 ### 3. Ask a question
 
-Open **Dialog**, paste this into **Prompt**, and press **Send**:
+Open **Dialog** and send:
 
 ```text
-Write a short product description using this brief.
-Include the height and cable length. Do not invent specifications.
+What are the studio lamp's height, cable length, and weight?
 ```
 
-With Grok, read the answer and check its details against your brief. Then try a follow-up:
+With Grok, check whether the answer preserves **420 mm** and **1.8 m** and says that the weight was not provided.
+
+These are checks for you to make. The app does not automatically grade this answer.
+
+Then try:
 
 ```text
-What is the lamp's weight?
+Turn the known specifications into a two-sentence product description.
 ```
 
-The brief does not provide a weight. This gives you a simple way to inspect whether the answer acknowledges missing information.
+Each request includes the context once, the conversation's completed successful exchanges, and your new prompt.
 
-Each request includes the context once, followed by the conversation’s completed successful exchanges and your latest question. You do not need to paste the brief again.
+Failed and incomplete turns stay in the record but are not included in later requests.
 
-On a keyboard, **Enter** sends and **Shift+Enter** inserts a new line.
+On a keyboard, **Enter** sends. **Shift+Enter** adds a line.
 
-### 4. Inspect the record
+### 4. Inspect what happened
 
-Open **Diagnostics**. It shows the latest turn unless you select an earlier numbered turn.
+Open **Diagnostics**. Select **Latest** or an earlier numbered turn.
 
-Expand **Raw request** to see the frozen context, assembled messages, settings, and budget information. Editing the Injector afterward does not change the earlier turn’s snapshot.
+Start with **Status**. A successful status means the request completed, not that the answer passed a fact check.
 
-The record hash remains **Pending** while the outcome is unfinished. Once finalized, the record can be checked against its stored hash.
+Expand **Recorded request details** to inspect the saved context, message list, and settings for that turn.
 
-### 5. Save your work
+A blocked or failed turn can still have a prepared request record. Its presence alone does not prove that a model processed it.
 
-Use **Export turn** for the selected turn, or return to **Injector** and choose **Export session** for a bundle of all saved conversations.
+Earlier turn records retain the context and settings used at the time. Editing the current draft does not rewrite them.
 
-These exports contain your context and conversation text. Keep them wherever you want your project records stored.
+### 5. Export a copy
 
-## Compare with no background
+Choose **Export this turn** in Diagnostics to save the selected exchange.
 
-**Baseline** opens a fresh conversation with empty context and no inherited messages. It preserves your earlier conversations.
+Choose **Export context** beside Context to save only the current context.
 
-To try a comparison:
+Choose **Export all conversations** to save all conversations currently held by the app in this browser, not just the selected conversation.
 
-1. Ask a question with your context present.
-2. Note the provider, model, and request settings.
-3. Select **Baseline** and ask the same question with those settings.
-4. Reopen either conversation under **Saved conversations** to inspect its records.
+Exports include your text. Review them before sharing.
 
-This lets you explore how the responses differ. A single comparison does not establish that one setup consistently performs better; model responses can vary.
+## Compare an answer with and without context
 
-## Editing context and switching conversations
+**Start without context** starts a separate conversation with empty context and no previous messages. It does not delete your earlier conversations.
 
-The Injector is an editable draft. If its context text, delivery mode, provider, or model differs from the active conversation, the **next Send** starts a new conversation. Earlier records remain saved. Changing only the name does not reset history.
+For a simple comparison, compare the first question in the walkthrough with the same question sent as the first message in that new conversation.
 
-Use **Saved conversations** to reopen a previous conversation. Failed, blocked, incomplete, timed-out, and interrupted turns remain visible, but are excluded from the history sent with later requests.
+Keep the provider, model, delivery choice, and request settings the same.
 
-The delivery choices are:
+Use **Saved conversations** to move between the two records. Look for correct details, invented details, and acknowledgement of missing information.
 
-- **System slot:** puts the context in a system message before the conversation.
-- **User paste:** puts the context in an initial user message before the conversation.
+Starting without context removes the background and conversation history supplied by this app. It does not remove the model's existing knowledge.
 
-These options change how the model receives the background. Neither guarantees compliance.
+One comparison is an example, not proof of a consistent improvement.
 
-## Reading Diagnostics
+## What happens when I change something?
 
-| Readout | Meaning |
+The Injector is a draft for your next request.
+
+Changing the **context text**, **delivery choice**, **provider**, or **model** starts a new conversation on the next Send when that value differs from the active conversation.
+
+The previous conversation remains available.
+
+Changing only the name does not restart the conversation.
+
+Adjusting request settings affects the next request without, by itself, starting a new conversation.
+
+**Clear context** empties the draft context text. It does not delete saved conversations or clear the name.
+
+Use **Start without context** for an explicit fresh conversation without context.
+
+## System slot or User paste?
+
+**System slot** places your context in a system message before the conversation. This walkthrough uses it for the task instructions you wrote.
+
+**User paste** places your context in an initial user message before the conversation history.
+
+Both include the context once per request. They change its role in the request, not the underlying model.
+
+Neither guarantees that every instruction will be followed.
+
+## Understanding the numbers
+
+**Bytes** measure text size.
+
+**Tokens** are the smaller text pieces a model processes.
+
+They are different measurements.
+
+| Readout | Plain-language meaning |
 | --- | --- |
-| **Status** | Whether the turn succeeded, is pending, was blocked, or ended with another outcome. |
-| **Context SHA-256** | Fingerprint of the submitted context text. |
-| **Prompt SHA-256** | Fingerprint of the assembled message list. |
-| **Record SHA-256** | Fingerprint of the finalized turn record. |
-| **Context / Prompt bytes** | Text size in bytes, not tokens. |
-| **Injection tokens** | The count for the context text alone, when available. |
-| **Injection count scope** | What that injector count measured. |
-| **Counted input tokens** | The preflight count of the assembled request, including context and history. |
-| **Full-request count scope** | What the assembled-request count measured. This is not the provider’s usage report. |
-| **Provider input / output / total** | Usage returned by the provider, when available. |
-| **Input budget** | The configured capacity left for input after reserving the maximum output allowance. |
-| **Requested / Returned model** | The model requested by the app and the identity returned by the provider. |
+| **Injection tokens** | The count for your context alone. |
+| **Counted input tokens** | The count taken before the response request for the assembled input, including context and conversation history. |
+| **Provider input / output / total** | Usage information returned by the provider, when available. |
+| **Input budget** | The configured space available for the input after allowing for the requested output limit. |
+| **Max output tokens** | The app's requested limit for the visible reply. It is not the model's entire context capacity. |
+| **Quota reserved / settled tokens** | The deployment's allowance accounting, not a bill or a dollar amount. |
 
-Tokens are pieces of text, not necessarily whole words. Injection tokens are already included in the whole-request count; do not add them again.
+The context count is already included in the full input count. **Do not add it again.**
 
-A normal Grok request with context makes two tokenize calls before the reply: the injector alone, then the whole request. Empty context records zero injector tokens and then tokenizes the request once.
+The count before a request and the provider's reported usage can measure different things. They are not interchangeable.
 
-Preflight counts and provider usage have different measurement scopes. The preflight count does not establish exact chat-template overhead. Read the measurement note below the counts. “Not counted” or “not reported” means the value is unavailable, not zero.
+**Not counted**, **not reported**, and similar labels mean unavailable, not zero.
 
-If the provider later reports more input than the calculated allowance, a completed reply stays on screen. Diagnostics shows a budget warning with both numbers. The preflight count is not replaced. The turn can still be used as history. A reply cut off at the output cap stays incomplete and is not replayed. A malformed response stays an error.
+The input-budget bar shows how much of the configured input allowance is used.
 
-The budget bar shows counted input against the input budget. It is not a score for answer quality, accuracy, or instruction following.
+It is not an accuracy score, confidence score, or measure of how carefully the AI read your context.
 
-Quota rows, when present, are the app’s reserved allowance. They are not the provider’s bill and they are not a dollar amount.
+## Understanding fingerprints
 
-## Import, export, and deletion
+A **hash**, or fingerprint, identifies particular saved content.
 
-- **Import** accepts plain text, a context JSON file containing `name` and `text`, or supported workbench turn/session JSON exports.
-- **Export** beside the Context box saves just the current named context as JSON.
-- **Export turn** saves the selected turn and its diagnostics.
-- **Export session** saves all conversations currently stored by the app in this browser.
-- **Delete**, then **Confirm delete**, removes the selected saved conversation from this browser.
+**Context SHA-256** identifies the context text.
 
-Import checks supported record formats and hashes. If a record is rejected, read the named field or hash error and keep the original export for investigation.
+**Prompt SHA-256** identifies the assembled message list.
 
-On devices where a direct download is unavailable, the app may offer a share sheet or an export text screen. Use **Share** to save a file, or **Copy** to preserve the complete JSON text.
+**Record SHA-256** identifies the finalized turn record.
 
-A GitHub URL pasted into Context is only text; this version does not fetch repository contents. ZIP extraction is also not implemented. Paste the relevant text or import a text file instead.
+A matching record fingerprint means the saved record is consistent with its stored fingerprint.
 
-## Storage and data flow
+It does not prove who produced the answer, that the provider processed every part of the request, or that the answer follows your instructions.
 
-Conversations are saved in the current browser. They do not automatically follow you to another browser or device. Clearing site data can remove them; export copies you want to keep.
+A record fingerprint can remain **Pending** until the outcome is finalized.
 
-The current save format is a packed copy under a new browser key. Repeated context is stored once. Each turn still rebuilds its original text and hashes. Older unpacked saves are still opened. After the new copy checks out, the older copy is left in place. Deleting a conversation does not bring that older copy back.
+## Import, storage, and privacy
 
-If the browser cannot read a save, a warning stays visible on every panel. You can export the raw saved bytes. The app does not replace them until you confirm **Reset saved data**.
+**Import** accepts plain text, context JSON containing `name` and `text`, and supported workbench turn or session exports.
 
-If a save fails after that, the warning says the latest changes are only on this page. Export the session before you close it. The warning goes away after a save succeeds.
+Supported imported records are checked before being accepted.
 
-Mock execution makes no model-provider call. Loading the hosted website can still use the network.
+Pasting a website or GitHub link does not load the linked content. Paste the relevant text or import a text file.
 
-For Grok, the app sends the assembled context, successful conversation history, and latest prompt through its server to xAI. The API credential stays on the server. The access token is checked there and is not written into the record. The adapter requests storage off, but that flag is not a guarantee about all provider-side retention. Deleting a local conversation does not delete already exported files or establish deletion at the provider.
+This version does not extract ZIP archives or provide a document-reading workflow for PDFs and images.
 
-## If something does not work
+Conversations are saved in this browser. They do not automatically appear on another device.
 
-**Grok is unavailable:** The server needs Grok enabled, an API key, an access token, and a shared database for the request allowance. Visitors do not enter the API key in the Context box. You can explicitly select Mock to try the record workflow. A refused Grok request stays a failure. It does not switch to Mock.
+Export important work before clearing site data or moving to another browser.
 
-**The response is a JSON receipt:** Mock is selected. Switch to Grok for an AI answer when available.
+Mock makes no model-provider call.
 
-**The request is blocked:** Read the reason in Dialog and the budget information in Diagnostics. Reduce the context, start a fresh conversation to remove accumulated history, or reduce the output allowance where appropriate. The app does not silently truncate the request. A daily allowance message means the deployment limit was reached. That limit is a request and token allowance, not a dollar cap.
+Grok sends the assembled messages through the app's server to xAI. Local conversation storage does not make Grok requests local or offline.
 
-**The response is incomplete or has status `length`:** The output limit was reached. Open **Request settings** in Injector, increase **Max output tokens** within the supported range, and submit the question again. The partial response stays recorded and is not included in subsequent history.
+The access token stays in page memory and must be entered again after a reload. It is not saved in conversation exports.
 
-**A budget warning appears on a finished reply:** The reply was received. The provider’s input count was higher than the allowance calculated before the call. The reply and the original count are both kept.
+Never paste an API key into Context or Dialog.
 
-**A request fails or times out:** Inspect the error. Grok failures do not silently become Mock responses. If you retry, it is a new request.
+The adapter requests provider storage off, but this is not a guarantee about every form of provider retention.
 
-**A hash matches but the answer is wrong:** A matching hash confirms record consistency. It does not check the answer against the context.
+Deleting a local conversation does not delete exported files or establish deletion at the provider.
 
-**A storage warning is showing:** The conversations on screen may not be saved. Export the session. If the warning is about unreadable data, export the saved bytes before you confirm a reset.
+## Troubleshooting
 
-## Running your own copy
+| What you see | What to do |
+| --- | --- |
+| A JSON receipt instead of an answer | Mock is selected. Choose Grok for an AI response when access is available. |
+| Grok is unavailable or access is denied | Read the reason. Check the app access token or contact the deployment owner. Mock can still demonstrate the record workflow. |
+| The request is too large | Read Diagnostics. Reduce the background text or begin a fresh conversation to avoid accumulated history. The app does not silently shorten the input. |
+| A reply ends early or shows `length` | Increase Max output tokens within the allowed range and send the question again. The partial turn remains recorded but is not replayed. |
+| A finished reply has a budget warning | Read both counts in Diagnostics. The response and original measurements are retained. |
+| A timeout, failure, or allowance limit | Read the specific reason. A retry is a new request. Grok failures do not automatically switch to Mock. |
+| A storage warning | Export all conversations on screen before closing. For unreadable saved data, also export the original saved data before confirming a reset. |
+| A matching hash beside a wrong answer | Review the answer against your source text. Hash checking is not fact checking. |
 
-See [Run](../README.md#run), [Access token](../README.md#access-token), and [Shared allowance](../README.md#shared-allowance) in the README.
+On devices that cannot download directly, use the available Share or Copy option to preserve the complete export text.
 
-Paid Grok on a deployment is not protected until that deployment has `WORKBENCH_ENABLE_GROK=1`, `XAI_API_KEY`, `WORKBENCH_ACCESS_TOKEN`, and `DATABASE_URL`. Setting them in a local preview is a separate step from the hosted app.
+## Source code and setup
 
-## If Grok stays locked after a timeout
-
-The app may keep a request slot reserved when the provider's final outcome is unknown. This prevents an interrupted request from freeing an allowance while it may still be running. The deployment owner can review and release the slot after confirming the work has stopped; see the README's shared-allowance instructions. Your visible response and saved records are not deleted.
-
-Quota reserved/settled tokens are allowance accounting, separate from provider usage. Partial or missing usage does not mean a free request.
+[View the project on GitHub](https://github.com/donaldtuttle/context-engineer-workbench) for source code, technical documentation, and deployment instructions.

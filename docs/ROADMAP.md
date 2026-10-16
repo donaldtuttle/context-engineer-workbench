@@ -67,18 +67,17 @@ A new provider is an adapter plus a pinned window table. It is not a setting.
 
 Hard edges today:
 
-- `ProviderId` is only `"mock"` or `"grok"` (`src/lib/workbench/types.ts`).
-- `isProvider` in `src/lib/workbench/session.ts` rejects anything else on import.
-- `TransportRecord` is only `OFFLINE_FIXTURE` or `xai-https` locked to `https://api.x.ai`.
-- `src/lib/workbench/grok-adapter.ts` refuses any other host.
-- `src/lib/workbench/windows.ts` pins only `grok-4.7`, `grok-4.6`, and `grok-4.5` at 500,000. Verified 2026-10-12 against docs.x.ai. Unknown ids are refused.
-- The record hash covers the transport. Do not edit an old `xai-https` record to point it at another vendor.
+- `ProviderId` is `"mock"`, `"grok"`, or `"chatgpt"`. Import still rejects `"claude"`.
+- Grok transport stays `xai-https` locked to `https://api.x.ai`. ChatGPT transport is `openai-https` locked to `https://api.openai.com`. Do not edit an old `xai-https` record.
+- `src/lib/workbench/grok-adapter.ts` refuses any host other than api.x.ai. The ChatGPT adapter refuses any host other than api.openai.com.
+- Grok windows stay `grok-4.7`, `grok-4.6`, and `grok-4.5` at 500,000. Verified 2026-10-12. ChatGPT windows are `gpt-4.1`, `gpt-4.1-mini`, and `gpt-4.1-nano` at 1,047,576. Verified 2026-10-15. Unknown ids are refused.
+- The record hash covers the transport. A ChatGPT turn hashes differently from a Grok turn. Old records must import unchanged.
 
 Stored `assembledMessages` stay in the workbench shape: system, user, assistant. Map that to the vendor's wire format inside the adapter. Do not change the saved transcript to match the wire format.
 
 ## Next: how well the answer matches the context
 
-This is the next feature. Do it before a ChatGPT or Claude adapter.
+This is the next feature. ChatGPT is already in the app. Do this before Claude.
 
 The question is: how well does this answer match the context that was sent?
 
@@ -133,7 +132,7 @@ Mock must be able to produce both a supported and an unsupported fixture. Do not
 
 ### Pickup
 
-Start from `main`. Read this file. Implement the checks and the with-context / without-context comparison. Leave provider ports until this score can fail in public.
+ChatGPT is already in this tree. Implement the checks and the with-context / without-context comparison. Leave Claude until this score can fail in public.
 
 ## Order of work after that
 
@@ -147,7 +146,11 @@ Existing Mock and Grok records must import with the same hash. A missing new fie
 
 Changing provider still opens a new conversation. Keep that.
 
+Done for ChatGPT. Claude still needs its own id and transport.
+
 ### 2. ChatGPT, if a second paid provider is wanted
+
+The ChatGPT adapter is in the app. Claude is not.
 
 Closest port. Chat completions, different host and key.
 

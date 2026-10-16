@@ -78,8 +78,8 @@ export async function beginSend(state: PersistedState, userPrompt: string, clock
   const prompt = userPrompt.trim();
   if (!prompt) return { ok: false, reason: "Enter a prompt." };
   const draft = state.draft;
-  if (draft.provider === "grok" && !draft.model.trim()) {
-    return { ok: false, reason: "Enter a Grok model ID." };
+  if ((draft.provider === "grok" || draft.provider === "chatgpt") && !draft.model.trim()) {
+    return { ok: false, reason: draft.provider === "chatgpt" ? "Enter a ChatGPT model ID." : "Enter a Grok model ID." };
   }
   if (
     !Number.isFinite(draft.timeoutSeconds) ||
@@ -193,16 +193,25 @@ export async function beginSend(state: PersistedState, userPrompt: string, clock
     transport:
       draft.provider === "mock"
         ? { kind: "OFFLINE_FIXTURE", network: "blocked" }
-        : {
-            kind: "xai-https",
-            origin: "https://api.x.ai",
-            tokenizePath: "/v1/tokenize-text",
-            chatPath: "/v1/chat/completions",
-            retries: 0,
-            storeMessages: false,
-            tools: false,
-            encryptedContentStored: false,
-          },
+        : draft.provider === "chatgpt"
+          ? {
+              kind: "openai-https",
+              origin: "https://api.openai.com",
+              chatPath: "/v1/chat/completions",
+              retries: 0,
+              storeMessages: false,
+              tools: false,
+            }
+          : {
+              kind: "xai-https",
+              origin: "https://api.x.ai",
+              tokenizePath: "/v1/tokenize-text",
+              chatPath: "/v1/chat/completions",
+              retries: 0,
+              storeMessages: false,
+              tools: false,
+              encryptedContentStored: false,
+            },
   };
 
   const withTurn: Conversation = { ...conversation, turns: [...conversation.turns, turn] };
@@ -406,7 +415,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function isProvider(value: unknown): value is ProviderId {
-  return value === "mock" || value === "grok";
+  return value === "mock" || value === "grok" || value === "chatgpt";
 }
 
 function isDelivery(value: unknown): value is DeliveryMode {
@@ -586,6 +595,16 @@ function problemsForTurn(value: unknown, label: string): string[] {
     if (transport.network !== "blocked") problems.push(`${id} transport is invalid`);
   } else if (transport.kind === "xai-https") {
     if (transport.origin !== "https://api.x.ai" || transport.retries !== 0 || transport.storeMessages !== false || transport.tools !== false) {
+      problems.push(`${id} transport is invalid`);
+    }
+  } else if (transport.kind === "openai-https") {
+    if (
+      transport.origin !== "https://api.openai.com" ||
+      transport.chatPath !== "/v1/chat/completions" ||
+      transport.retries !== 0 ||
+      transport.storeMessages !== false ||
+      transport.tools !== false
+    ) {
       problems.push(`${id} transport is invalid`);
     }
   } else problems.push(`${id} transport is invalid`);

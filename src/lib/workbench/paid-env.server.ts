@@ -14,6 +14,8 @@ export function readPaidEnv(): PaidEnv {
     apiKey: process.env.XAI_API_KEY,
     contextFloor: process.env.WORKBENCH_GROK_CONTEXT_FLOOR,
     accessToken: process.env.WORKBENCH_ACCESS_TOKEN,
+    openaiFlag: process.env.WORKBENCH_ENABLE_CHATGPT,
+    openaiKey: process.env.OPENAI_API_KEY,
     quota: readQuotaConfig({
       ratePerMin: process.env.WORKBENCH_RATE_PER_MIN,
       dailyRequestCap: process.env.WORKBENCH_DAILY_REQUEST_CAP,
